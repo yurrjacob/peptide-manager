@@ -2,11 +2,12 @@
 const path = require('node:path');
 const express = require('express');
 const cookieParser = require('cookie-parser');
-const { seedIfEmpty, backfillDescriptions } = require('./src/seed');
+const { seedIfEmpty, backfillDescriptions, archivePastOrders } = require('./src/seed');
 const routes = require('./src/routes');
 
 const seeded = seedIfEmpty();
 backfillDescriptions();
+archivePastOrders();
 
 const app = express();
 app.disable('x-powered-by');
