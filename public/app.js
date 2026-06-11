@@ -193,7 +193,7 @@ function renderTable(container, cfg) {
 /* ================= shell & router ================= */
 const ADMIN_NAV = [
   ['dashboard', '📊', 'Dashboard'], ['orders', '🧾', 'Orders'], ['inventory', '📦', 'Inventory'],
-  ['resellers', '🤝', 'Resellers'], ['payments', '💵', 'Payments'],
+  ['resellers', '🤝', 'Resellers'],
   ['audit', '🕘', 'Activity log'], ['settings', '⚙️', 'Settings'],
 ];
 const RESELLER_NAV = [
@@ -240,7 +240,7 @@ function buildShell() {
 function closeSidebar() { $('#sidebar').classList.remove('open'); $('#scrim').style.display = 'none'; }
 
 const ROUTES = {
-  admin: { dashboard: pageDashboard, orders: pageOrders, inventory: pageInventory, resellers: pageResellers, payments: pagePayments, audit: pageAudit, settings: pageSettings },
+  admin: { dashboard: pageDashboard, orders: pageOrders, inventory: pageInventory, resellers: pageResellers, audit: pageAudit, settings: pageSettings },
   reseller: { 'home': pageResellerHome, 'new-order': pageResellerNewOrder, 'my-orders': pageResellerOrders, 'price-list': pageResellerPrices },
 };
 async function navigate() {
@@ -1019,7 +1019,24 @@ async function openResellerDetail(id, onChanged) {
       { label: 'Amount', cls: 'num', html: x => `<b class="pos">${money(x.amount)}</b>` },
       { label: 'Method', html: x => esc(x.method || '—') },
       { label: 'Notes', html: x => `<span class="cell-sub">${esc(x.notes || '—')}</span>` },
+      { label: '', html: x => `<button class="btn sm danger" data-delpay="${x.id}">Delete</button>` },
     ],
+    afterDraw(container) {
+      $$('button[data-delpay]', container).forEach(b => b.addEventListener('click', async () => {
+        const pay = r.payments.find(x => x.id === Number(b.dataset.delpay));
+        const ok = await confirmDialog({
+          title: 'Delete payment?',
+          message: `Remove the ${money(pay.amount)} payment from ${r.name}? The orders it covered will show as owed again.`,
+        });
+        if (!ok) return;
+        try {
+          await api(`/payments/${pay.id}`, { method: 'DELETE' });
+          toast('Payment deleted');
+          m.close();
+          openResellerDetail(r.id, onChanged);
+        } catch (err) { toast(err.message, 'error'); }
+      }));
+    },
   });
 
   const done = async () => { m.close(); onChanged && onChanged(); };
