@@ -396,7 +396,7 @@ router.patch('/orders/:id/set-status', requireAdmin, (req, res) => {
       db.prepare("UPDATE deliveries SET status='cancelled', updated_at=datetime('now') WHERE order_id=?").run(order.id);
     } else if (v === 'unpaid') {
       if (H.orderAllocated(order.id) > 0.004) {
-        throw H.httpError(400, 'This order already has a payment recorded. Delete that payment on the Payments page first, then set it to Unpaid.');
+        throw H.httpError(400, 'This order already has a payment recorded. Open Resellers → History and delete that payment first, then set the order to Unpaid.');
       }
       if (order.inventory_deducted) H.restoreOrderInventory(order.id, req.user);
       db.prepare("UPDATE orders SET status='open', updated_at=datetime('now') WHERE id=?").run(order.id);
