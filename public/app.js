@@ -193,7 +193,7 @@ function renderTable(container, cfg) {
 /* ================= shell & router ================= */
 const ADMIN_NAV = [
   ['dashboard', '📊', 'Dashboard'], ['orders', '🧾', 'Orders'], ['inventory', '📦', 'Inventory'],
-  ['resellers', '🤝', 'Resellers'], ['payments', '💵', 'Payments'], ['deliveries', '🚚', 'Deliveries'],
+  ['resellers', '🤝', 'Resellers'], ['payments', '💵', 'Payments'],
   ['audit', '🕘', 'Activity log'], ['settings', '⚙️', 'Settings'],
 ];
 const RESELLER_NAV = [
@@ -240,7 +240,7 @@ function buildShell() {
 function closeSidebar() { $('#sidebar').classList.remove('open'); $('#scrim').style.display = 'none'; }
 
 const ROUTES = {
-  admin: { dashboard: pageDashboard, orders: pageOrders, inventory: pageInventory, resellers: pageResellers, payments: pagePayments, deliveries: pageDeliveries, audit: pageAudit, settings: pageSettings },
+  admin: { dashboard: pageDashboard, orders: pageOrders, inventory: pageInventory, resellers: pageResellers, payments: pagePayments, audit: pageAudit, settings: pageSettings },
   reseller: { 'home': pageResellerHome, 'new-order': pageResellerNewOrder, 'my-orders': pageResellerOrders, 'price-list': pageResellerPrices },
 };
 async function navigate() {
@@ -368,21 +368,16 @@ async function pageDashboard(page) {
   const months = d.monthly;
   const maxMonthly = Math.max(1, ...months.map(m => Math.max(m.revenue, m.profit)));
   const maxProd = Math.max(1, ...d.top_products.map(p => p.revenue));
-  const maxRes = Math.max(1, ...d.top_resellers.map(p => p.revenue));
 
   page.innerHTML = `
     <div class="page-head"><div><h1>Dashboard</h1>
       <div class="page-sub">Everything at a glance — ${fmtDate(today())}</div></div></div>
     <div class="cards">
-      <div class="stat good"><div class="lbl">Total revenue</div><div class="val">${money(c.total_revenue)}</div><div class="sub">completed orders</div></div>
-      <div class="stat"><div class="lbl">Total cost</div><div class="val">${money(c.total_cost)}</div><div class="sub">completed orders</div></div>
-      <div class="stat ${c.total_profit < 0 ? 'bad' : 'good'}"><div class="lbl">Total profit</div><div class="val">${money(c.total_profit)}</div><div class="sub">completed orders</div></div>
-      <div class="stat warn"><div class="lbl">Open order value</div><div class="val">${money(c.open_value)}</div><div class="sub">${c.open_orders} open order${c.open_orders === 1 ? '' : 's'}</div></div>
-      <div class="stat ${c.amount_owed > 0 ? 'warn' : 'good'}"><div class="lbl">Owed by resellers</div><div class="val">${money(c.amount_owed)}</div><div class="sub">unpaid balances</div></div>
-      <div class="stat"><div class="lbl">Completed orders</div><div class="val">${c.completed_orders}</div></div>
-      <div class="stat"><div class="lbl">Open orders</div><div class="val">${c.open_orders}</div></div>
-      <div class="stat"><div class="lbl">Inventory @ cost</div><div class="val">${money(c.inventory_at_cost)}</div></div>
-      <div class="stat"><div class="lbl">Inventory @ retail</div><div class="val">${money(c.inventory_at_retail)}</div></div>
+      <div class="stat good"><div class="lbl">Total revenue</div><div class="val">${money(c.total_revenue)}</div><div class="sub">${c.completed_orders} completed order${c.completed_orders === 1 ? '' : 's'}</div></div>
+      <div class="stat ${c.total_profit < 0 ? 'bad' : 'good'}"><div class="lbl">Total profit</div><div class="val">${money(c.total_profit)}</div><div class="sub">after ${money(c.total_cost)} cost</div></div>
+      <div class="stat ${c.amount_owed > 0 ? 'warn' : 'good'}"><div class="lbl">Owed to you</div><div class="val">${money(c.amount_owed)}</div><div class="sub">unpaid reseller balances</div></div>
+      <div class="stat ${c.open_orders > 0 ? 'warn' : ''}"><div class="lbl">Open orders</div><div class="val">${c.open_orders}</div><div class="sub">worth ${money(c.open_value)}</div></div>
+      <div class="stat"><div class="lbl">Inventory value</div><div class="val">${money(c.inventory_at_cost)}</div><div class="sub">${money(c.inventory_at_retail)} at retail</div></div>
       <div class="stat ${c.low_stock_count > 0 ? 'bad' : 'good'}"><div class="lbl">Low / out of stock</div><div class="val">${c.low_stock_count}</div><div class="sub">products need attention</div></div>
     </div>
 
@@ -412,23 +407,10 @@ async function pageDashboard(page) {
       </div>
     </div>
 
-    <div class="grid-2">
-      <div class="panel"><div class="panel-head"><h2>Top resellers by revenue</h2></div>
-        <div class="panel-body">${d.top_resellers.length ? d.top_resellers.map(p => `
-          <div class="hbar-row"><span class="nm">${esc(p.name)}</span>
-            <div class="hbar-track"><div class="hbar-fill green" style="width:${Math.max(2, p.revenue / maxRes * 100)}%"></div></div>
-            <span class="vv">${money(p.revenue)}</span></div>`).join('')
-          : '<div class="empty">No reseller sales yet.</div>'}</div>
-      </div>
-      <div class="panel"><div class="panel-head"><h2>Low stock products</h2>
-        <a class="btn sm" href="#/inventory">View inventory</a></div>
-        <div id="dash-lowstock"></div>
-      </div>
-    </div>
-
     <div class="panel"><div class="panel-head"><h2>Open orders</h2><a class="btn sm" href="#/orders">All orders</a></div>
       <div id="dash-open"></div></div>
-    <div class="panel"><div class="panel-head"><h2>Recent orders</h2></div><div id="dash-recent"></div></div>`;
+    <div class="panel"><div class="panel-head"><h2>Low stock products</h2><a class="btn sm" href="#/inventory">View inventory</a></div>
+      <div id="dash-lowstock"></div></div>`;
 
   renderTable($('#dash-lowstock'), {
     rows: d.low_stock.slice(0, 10),
@@ -448,7 +430,6 @@ async function pageDashboard(page) {
     { label: 'Status', html: r => statusBadge(r) },
   ];
   renderTable($('#dash-open'), { rows: d.open_orders, empty: 'No open orders. 🎉', columns: miniOrderCols, onRow: r => openOrderDetail(r.id) });
-  renderTable($('#dash-recent'), { rows: d.recent_orders, empty: 'No orders yet.', columns: miniOrderCols, onRow: r => openOrderDetail(r.id) });
 }
 
 /* ======================================================================
@@ -911,7 +892,8 @@ async function pageResellers(page) {
           label: '', cls: 'nowrap', html: r => `
           <button class="btn sm" data-act="view" data-id="${r.id}">History</button>
           <button class="btn sm" data-act="pay" data-id="${r.id}">＋ Payment</button>
-          <button class="btn sm" data-act="edit" data-id="${r.id}">Edit</button>` },
+          <button class="btn sm" data-act="edit" data-id="${r.id}">Edit</button>
+          ${r.name !== 'PAST ORDERS' ? `<button class="btn sm danger" data-act="del" data-id="${r.id}">Delete</button>` : ''}` },
       ],
       onRow: r => openResellerDetail(r.id, refresh),
       afterDraw(container) {
@@ -920,6 +902,7 @@ async function pageResellers(page) {
           if (b.dataset.act === 'view') openResellerDetail(r.id, refresh);
           if (b.dataset.act === 'pay') openPaymentForm({ reseller: r, onSaved: refresh });
           if (b.dataset.act === 'edit') openResellerForm(r, refresh);
+          if (b.dataset.act === 'del') deleteReseller(r, refresh);
         }));
       },
     });
@@ -927,6 +910,20 @@ async function pageResellers(page) {
   $('#export-res').onclick = () => { window.location.href = '/api/export/reseller-balances.csv'; };
   $('#add-res').onclick = () => openResellerForm(null, refresh);
   await refresh();
+}
+
+async function deleteReseller(r, onDone) {
+  const ok = await confirmDialog({
+    title: `Delete "${r.name}"?`,
+    message: `${r.total_orders > 0 ? `Their ${r.total_orders} order(s) and payments will be moved to the PAST ORDERS archive so your numbers stay correct. ` : ''}Their login will be removed. This cannot be undone.`,
+  });
+  if (!ok) return;
+  try {
+    await api(`/resellers/${r.id}`, { method: 'DELETE' });
+    toast('Reseller deleted');
+    await loadResellers(true);
+    onDone && onDone();
+  } catch (err) { toast(err.message, 'error'); }
 }
 
 function openResellerForm(r, onSaved) {
