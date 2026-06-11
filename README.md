@@ -41,3 +41,5 @@ Reset your admin password in **Settings → Admin users**. Reset reseller passwo
 - `npm run reset-db` deletes the database; the next `npm start` re-creates it with the starter products and sample orders.
 - The seeded sample orders are flagged as already deducted from stock, since the starter on-hand counts already reflect those past sales.
 - The database has a `customer` role reserved in the users table, so a customer login portal can be added later without schema changes.
+
+Hosted on Railway.
