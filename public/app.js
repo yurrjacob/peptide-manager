@@ -1409,7 +1409,7 @@ async function pageResellerHome(page) {
   const showProfit = S.settings.show_profit_to_resellers;
   page.innerHTML = `
     <div class="page-head"><div><h1>Hi, ${esc(S.user.name)} 👋</h1>
-      <div class="page-sub">Your discount: <b>${d.reseller.discount_pct}%</b> off retail</div></div>
+      <div class="page-sub">Here's how your sales are going</div></div>
       <div class="head-actions"><a class="btn primary" href="#/new-order">＋ New order</a></div></div>
     <div class="cards">
       <div class="stat ${d.unpaid_balance > 0 ? 'warn' : 'good'}"><div class="lbl">You owe</div><div class="val">${money(d.unpaid_balance)}</div><div class="sub">unpaid balance</div></div>
@@ -1437,14 +1437,14 @@ async function pageResellerNewOrder(page) {
   const data = await api('/my/products');
   const products = data.products;
   page.innerHTML = `
-    <div class="page-head"><div><h1>New order</h1><div class="page-sub">Prices auto-fill with your ${products[0] ? products[0].discount_pct : ''}% discount</div></div></div>
+    <div class="page-head"><div><h1>New order</h1><div class="page-sub">Your prices fill in automatically</div></div></div>
     <div class="panel"><div class="panel-body">
       <form id="ro-form" novalidate>
         <div class="form-error"></div>
         <div class="field"><label>Customer name <span class="req">*</span></label><input name="customer_name" placeholder="Who is this for?"></div>
         <div class="field"><label>Products <span class="req">*</span></label>
-          <div class="line-items" id="lines">
-            <div class="line-row header"><span>Product</span><span>Qty</span><span>Disc %</span><span style="text-align:right">Your price</span><span style="text-align:right">Line total</span><span></span></div>
+          <div class="line-items no-disc" id="lines">
+            <div class="line-row header"><span>Product</span><span>Qty</span><span style="text-align:right">Your price</span><span style="text-align:right">Line total</span><span></span></div>
           </div>
           <button type="button" class="btn sm" id="add-line">＋ Add product</button>
           <div class="totals-box" id="totals"></div>
@@ -1460,23 +1460,61 @@ async function pageResellerNewOrder(page) {
     <div class="disclaimer">${esc(data.disclaimer || '')}</div>`;
 
   const form = $('#ro-form');
-  // resellers cannot change discount — lock the inputs after autofill
-  const editor = setupLineEditor(form, products.map(p => ({ ...p, retail_price: p.retail_price, cost: null })), () => products[0] ? products[0].discount_pct : 0, { showProfit: false });
-  editor.addLine();
-  const lockDiscounts = () => $$('.li-disc', form).forEach(inp => { inp.readOnly = true; inp.tabIndex = -1; });
-  lockDiscounts();
-  $('#add-line', form).addEventListener('click', lockDiscounts);
-  $('#lines', form).addEventListener('change', lockDiscounts);
+  const linesEl = $('#lines', form);
+  const totalsEl = $('#totals', form);
+  const productOpts = products.map(p => `<option value="${p.id}">${esc(p.name)} — ${p.available} avail</option>`).join('');
+
+  function recalc() {
+    let total = 0;
+    $$('.line-row:not(.header)', linesEl).forEach(row => {
+      const p = products.find(x => x.id === Number($('.li-product', row).value));
+      const qty = Number($('.li-qty', row).value);
+      const priceEl = $('.li-final', row), totalEl = $('.li-total', row);
+      if (!p || !Number.isInteger(qty) || qty <= 0) {
+        priceEl.textContent = '—'; totalEl.textContent = '—'; return;
+      }
+      const line = round2(p.your_price * qty);
+      priceEl.textContent = money(p.your_price);
+      totalEl.textContent = money(line);
+      priceEl.classList.remove('muted'); totalEl.classList.remove('muted');
+      total = round2(total + line);
+    });
+    totalsEl.innerHTML = `<span>Amount owed: <b>${money(total)}</b></span>`;
+  }
+  function addLine() {
+    const row = document.createElement('div');
+    row.className = 'line-row';
+    row.innerHTML = `
+      <select class="li-product"><option value="">Select product…</option>${productOpts}</select>
+      <input class="li-qty" type="number" min="1" step="1" placeholder="1" inputmode="numeric">
+      <div class="line-calc li-final muted">—</div>
+      <div class="line-calc li-total muted">—</div>
+      <button type="button" class="line-del" title="Remove line">✕</button>`;
+    linesEl.appendChild(row);
+    const sel = $('.li-product', row), qty = $('.li-qty', row);
+    sel.addEventListener('change', () => { if (sel.value && qty.value === '') qty.value = 1; recalc(); });
+    qty.addEventListener('input', recalc);
+    $('.line-del', row).addEventListener('click', () => { row.remove(); recalc(); });
+    recalc();
+  }
+  $('#add-line', form).addEventListener('click', () => addLine());
+  addLine();
 
   $('#ro-submit').onclick = e => guard(e.target, async () => {
     try {
       if (!form.customer_name.value.trim()) throw new Error('Customer name is required.');
-      const items = editor.collect().map(({ product_id, qty }) => ({ product_id, qty }));
-      for (const it of items) {
-        const p = products.find(x => x.id === it.product_id);
+      const rows = $$('.line-row:not(.header)', linesEl);
+      if (!rows.length) throw new Error('Add at least one product to the order.');
+      const items = rows.map(row => {
+        const pid = Number($('.li-product', row).value) || null;
+        const qty = Number($('.li-qty', row).value);
+        const p = products.find(x => x.id === pid);
+        if (!pid || !p) throw new Error('Every line needs a product selected.');
+        if (!Number.isInteger(qty) || qty <= 0) throw new Error(`Quantity for "${p.name}" must be a whole number above zero.`);
         if (!p.can_order) throw new Error(`"${p.name}" is out of stock right now.`);
-        if (!data.allow_backorders && it.qty > p.available) throw new Error(`Only ${p.available} of "${p.name}" available.`);
-      }
+        if (!data.allow_backorders && qty > p.available) throw new Error(`Only ${p.available} of "${p.name}" available.`);
+        return { product_id: pid, qty };
+      });
       await api('/my/orders', {
         method: 'POST',
         body: { customer_name: form.customer_name.value.trim(), items, address: form.address.value, delivery_notes: form.delivery_notes.value, notes: form.notes.value },
@@ -1546,8 +1584,7 @@ async function pageResellerPrices(page) {
       columns: [
         { label: 'Product', html: r => `<span class="cell-main">${esc(r.name)}</span>`, sort: r => r.name },
         { label: 'Category', html: r => esc(r.category || '—'), sort: r => r.category || '' },
-        { label: 'Retail', cls: 'num', html: r => money(r.retail_price), sort: r => r.retail_price },
-        { label: 'Your discount', cls: 'num', html: r => `${r.discount_pct}%` },
+        { label: 'Retail (suggested)', cls: 'num', html: r => money(r.retail_price), sort: r => r.retail_price },
         { label: 'Your price', cls: 'num', html: r => `<b>${money(r.your_price)}</b>`, sort: r => r.your_price },
         { label: 'Availability', html: r => badge('stock', r.stock_status), sort: r => r.stock_status },
       ],
