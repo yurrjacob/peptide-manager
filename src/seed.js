@@ -36,6 +36,46 @@ const PRODUCTS = [
   ['Standard BAC Water (10mL)', 'Supplies', 1.50, 5.10, 7.50, 0],
 ];
 
+// Brief use-case descriptions, shown on price lists and the inventory page.
+const DESCRIPTIONS = {
+  'Hospira BAC Water (30 mL)': 'Sterile bacteriostatic water for reconstituting peptides.',
+  'Retatrutide (10 mg)': 'Weight loss and metabolic support.',
+  'GLOW (70 mg)': 'Skin, hair and recovery blend (GHK-Cu / BPC-157 / TB-500).',
+  'GHK-Cu (100 mg)': 'Copper peptide for skin and hair health.',
+  'MOTS-c (5 mg)': 'Energy, endurance and metabolic support.',
+  'Tirzepatide (10 mg)': 'GLP-1/GIP peptide for weight management.',
+  'TB-500 (5 mg)': 'Recovery and injury repair.',
+  'BPC-157 (20 mg)': 'Gut health and injury recovery.',
+  'Ipamorelin (10 mg)': 'Growth hormone support; recovery and sleep.',
+  'Tesamorelin (5 mg)': 'GH peptide; often used for stubborn belly fat.',
+  'DSIP (10 mg)': 'Deep-sleep support.',
+  'Thymosin Alpha-1 (10 mg)': 'Immune system support.',
+  'Melanotan (1 mg)': 'Tanning peptide.',
+  'HCG (5000 IU)': 'Hormone support; common TRT add-on.',
+  'NAD+ Buffer (500 mg)': 'Cellular energy and anti-aging.',
+  'CJC-1295 No DAC (10 mg)': 'GH-releasing peptide; recovery and anti-aging.',
+  'CJC-1295 + Ipamorelin': 'GH combo for recovery, sleep and body composition.',
+  'BPC-157 + TB-500 (10/10 mg)': 'Combined recovery and repair stack.',
+  'Oxytocin (10 mg)': 'Mood and social-bonding support.',
+  'Epitalon (10 mg)': 'Longevity / anti-aging peptide.',
+  'Epitalon (50 mg)': 'Longevity / anti-aging peptide (larger size).',
+  'KPV (10 mg)': 'Anti-inflammatory; gut and skin support.',
+  'KPV (30 mg)': 'Anti-inflammatory; gut and skin support (larger size).',
+  'Glutathione (600 mg)': 'Antioxidant; detox and skin brightening.',
+  'SS-31 (10 mg)': 'Mitochondrial support and energy.',
+  'Semax (5 mg)': 'Focus and cognitive support.',
+  '5-Amino-1MQ (50 mg)': 'Metabolism and fat-loss support.',
+  'VIP (10 mg)': 'Immune and inflammation regulation.',
+  'Selank (5 mg)': 'Calm focus; stress and anxiety support.',
+  'Standard BAC Water (10mL)': 'Bacteriostatic water for reconstituting peptides.',
+};
+
+// Fills in descriptions for existing databases (runs on every start, only touches blank ones).
+function backfillDescriptions() {
+  const upd = db.prepare("UPDATE products SET description = ? WHERE name = ? AND (description IS NULL OR description = '')");
+  for (const [name, desc] of Object.entries(DESCRIPTIONS)) upd.run(desc, name);
+}
+
 // Sample orders grouped: one order per (date, customer, reseller) with line items.
 // item: [productName, qty, discountPct]
 const ORDERS = [
@@ -83,11 +123,11 @@ function seedIfEmpty() {
     insUser.run('Angel', 'angel@peptide.local', hashPassword('angel123'), 'reseller', angelResellerId);
 
     // Products
-    const insProduct = db.prepare('INSERT INTO products (name, category, cost, wholesale_price, retail_price, on_hand, low_stock_threshold) VALUES (?,?,?,?,?,?,?)');
+    const insProduct = db.prepare('INSERT INTO products (name, category, cost, wholesale_price, retail_price, on_hand, low_stock_threshold, description) VALUES (?,?,?,?,?,?,?,?)');
     const insMove = db.prepare("INSERT INTO inventory_movements (product_id, change, type, note) VALUES (?,?,?,?)");
     const productIds = {};
     for (const [name, category, cost, wholesale, retail, onHand] of PRODUCTS) {
-      const id = insProduct.run(name, category, cost, wholesale, retail, onHand, 3).lastInsertRowid;
+      const id = insProduct.run(name, category, cost, wholesale, retail, onHand, 3, DESCRIPTIONS[name] || '').lastInsertRowid;
       productIds[name] = id;
       if (onHand > 0) insMove.run(id, onHand, 'initial', 'Starting inventory');
     }
@@ -136,4 +176,4 @@ function seedIfEmpty() {
   }
 }
 
-module.exports = { seedIfEmpty };
+module.exports = { seedIfEmpty, backfillDescriptions };

@@ -10,6 +10,11 @@ const db = new DatabaseSync(path.join(DATA_DIR, 'app.db'));
 try { db.exec('PRAGMA journal_mode = WAL;'); } catch { db.exec('PRAGMA journal_mode = TRUNCATE;'); }
 db.exec('PRAGMA foreign_keys = ON;');
 
+// Migrations for databases created by older versions
+function migrate() {
+  try { db.exec("ALTER TABLE products ADD COLUMN description TEXT DEFAULT ''"); } catch { /* column already exists */ }
+}
+
 db.exec(`
 CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,
@@ -151,5 +156,7 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 `);
+
+migrate();
 
 module.exports = db;

@@ -132,7 +132,7 @@ function validateProductBody(b) {
   return {
     name, category: str(b.category, 100), cost: H.round2(nums.cost), wholesale_price: H.round2(nums.wholesale_price),
     retail_price: H.round2(nums.retail_price), on_hand: onHand, low_stock_threshold: threshold,
-    supplier: str(b.supplier, 200), notes: str(b.notes, 1000)
+    supplier: str(b.supplier, 200), notes: str(b.notes, 1000), description: str(b.description, 300)
   };
 }
 
@@ -140,9 +140,9 @@ router.post('/products', requireAdmin, (req, res) => {
   const p = validateProductBody(req.body);
   const dupe = db.prepare('SELECT id FROM products WHERE name = ? AND active = 1').get(p.name);
   if (dupe) throw H.httpError(400, 'A product with this name already exists.');
-  const id = db.prepare(`INSERT INTO products (name, category, cost, wholesale_price, retail_price, on_hand, low_stock_threshold, supplier, notes)
-                         VALUES (?,?,?,?,?,?,?,?,?)`)
-    .run(p.name, p.category, p.cost, p.wholesale_price, p.retail_price, p.on_hand, p.low_stock_threshold, p.supplier, p.notes).lastInsertRowid;
+  const id = db.prepare(`INSERT INTO products (name, category, cost, wholesale_price, retail_price, on_hand, low_stock_threshold, supplier, notes, description)
+                         VALUES (?,?,?,?,?,?,?,?,?,?)`)
+    .run(p.name, p.category, p.cost, p.wholesale_price, p.retail_price, p.on_hand, p.low_stock_threshold, p.supplier, p.notes, p.description).lastInsertRowid;
   if (p.on_hand !== 0) db.prepare("INSERT INTO inventory_movements (product_id, change, type, note, created_by) VALUES (?,?,'initial','Starting inventory',?)").run(id, p.on_hand, req.user.id);
   H.audit(req.user, 'create', 'product', id, p.name);
   res.json(productWithStock(db.prepare('SELECT * FROM products WHERE id = ?').get(id)));
@@ -156,8 +156,8 @@ router.put('/products/:id', requireAdmin, (req, res) => {
     const diff = p.on_hand - existing.on_hand;
     db.prepare("INSERT INTO inventory_movements (product_id, change, type, note, created_by) VALUES (?,?,'adjustment','Manual edit of on-hand',?)").run(existing.id, diff, req.user.id);
   }
-  db.prepare(`UPDATE products SET name=?, category=?, cost=?, wholesale_price=?, retail_price=?, on_hand=?, low_stock_threshold=?, supplier=?, notes=?, updated_at=datetime('now') WHERE id=?`)
-    .run(p.name, p.category, p.cost, p.wholesale_price, p.retail_price, p.on_hand, p.low_stock_threshold, p.supplier, p.notes, existing.id);
+  db.prepare(`UPDATE products SET name=?, category=?, cost=?, wholesale_price=?, retail_price=?, on_hand=?, low_stock_threshold=?, supplier=?, notes=?, description=?, updated_at=datetime('now') WHERE id=?`)
+    .run(p.name, p.category, p.cost, p.wholesale_price, p.retail_price, p.on_hand, p.low_stock_threshold, p.supplier, p.notes, p.description, existing.id);
   H.audit(req.user, 'update', 'product', existing.id, p.name);
   res.json(productWithStock(db.prepare('SELECT * FROM products WHERE id = ?').get(existing.id)));
 });
@@ -723,7 +723,7 @@ router.get('/export/inventory.csv', requireAdmin, (req, res) => {
     { label: 'Retail Price', value: r => r.retail_price.toFixed(2) }, { label: 'On Hand', value: 'on_hand' },
     { label: 'Reserved', value: 'reserved' }, { label: 'Available', value: 'available' },
     { label: 'Low Stock Threshold', value: 'low_stock_threshold' }, { label: 'Stock Status', value: r => r.stock_status.replace(/_/g, ' ') },
-    { label: 'Supplier', value: 'supplier' }, { label: 'Notes', value: 'notes' }
+    { label: 'Supplier', value: 'supplier' }, { label: 'Description', value: 'description' }, { label: 'Notes', value: 'notes' }
   ]));
 });
 
@@ -743,7 +743,7 @@ router.get('/export/reseller-balances.csv', requireAdmin, (req, res) => {
 function stripCosts(order, showProfit) {
   const { total_cost, total_profit, ...rest } = order;
   rest.items = order.items.map(it => {
-    const { cost_per_unit, cost, profit, discount_pct, ...itemRest } = it;
+    const { cost_per_unit, cost, profit, discount_pct, retail_price, ...itemRest } = it;
     return showProfit ? { ...itemRest, profit } : itemRest;
   });
   if (showProfit) rest.total_profit = total_profit;
@@ -772,7 +772,7 @@ router.get('/my/products', requireReseller, (req, res) => {
     const ps = productWithStock(p);
     const calc = H.computeLine(p.retail_price, 0, r.discount_pct, 1);
     return {
-      id: p.id, name: p.name, category: p.category, retail_price: p.retail_price,
+      id: p.id, name: p.name, category: p.category, description: p.description || '',
       your_price: calc.final_price,
       available: ps.available, stock_status: ps.stock_status, can_order: allowBackorders || ps.available > 0
     };
