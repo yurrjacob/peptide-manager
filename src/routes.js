@@ -107,7 +107,9 @@ router.get('/me', requireAuth, (req, res) => {
 function productWithStock(p) {
   const reserved = H.reservedQty(p.id);
   const available = p.on_hand - reserved;
-  return { ...p, reserved, available, stock_status: H.stockStatus(available, p.low_stock_threshold) };
+  // one global low-stock threshold from Settings applies to every product
+  const threshold = Number(H.getSetting('low_stock_default_threshold')) || 0;
+  return { ...p, reserved, available, stock_status: H.stockStatus(available, threshold) };
 }
 
 router.get('/products', requireAdmin, (req, res) => {
@@ -118,12 +120,15 @@ router.get('/products', requireAdmin, (req, res) => {
 function validateProductBody(b) {
   const name = str(b.name, 200);
   if (!name) throw H.httpError(400, 'Product name is required.');
-  const nums = { cost: b.cost, wholesale_price: b.wholesale_price, retail_price: b.retail_price };
-  for (const [k, v] of Object.entries(nums)) {
+  for (const k of ['cost', 'retail_price']) {
+    const v = b[k];
     if (v === '' || v == null || !Number.isFinite(Number(v)) || Number(v) < 0) {
       throw H.httpError(400, `${k.replace(/_/g, ' ')} must be a number ≥ 0. Blank prices are not allowed.`);
     }
   }
+  const wholesale = (b.wholesale_price === '' || b.wholesale_price == null) ? 0 : Number(b.wholesale_price);
+  if (!Number.isFinite(wholesale) || wholesale < 0) throw H.httpError(400, 'Wholesale price must be a number ≥ 0.');
+  const nums = { cost: b.cost, wholesale_price: wholesale, retail_price: b.retail_price };
   const onHand = b.on_hand === '' || b.on_hand == null ? 0 : Number(b.on_hand);
   if (!Number.isInteger(onHand)) throw H.httpError(400, 'On hand must be a whole number.');
   const threshold = b.low_stock_threshold === '' || b.low_stock_threshold == null
@@ -370,6 +375,64 @@ router.patch('/orders/:id/delivery', requireAdmin, (req, res) => {
     const sets = Object.keys(fields).map(k => `${k} = ?`).join(', ');
     db.prepare(`UPDATE deliveries SET ${sets}, updated_at = datetime('now') WHERE order_id = ?`).run(...Object.values(fields), order.id);
     if (fields.status) H.audit(req.user, 'delivery-status', 'order', order.id, fields.status);
+    db.exec('COMMIT');
+  } catch (e) { db.exec('ROLLBACK'); throw e; }
+  res.json(fetchOrders('WHERE o.id = ?', [order.id])[0]);
+});
+
+// Simple combined status: unpaid → paid → delivered, or cancelled.
+// Handles money and stock side effects in one place.
+router.patch('/orders/:id/set-status', requireAdmin, (req, res) => {
+  const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(Number(req.params.id));
+  if (!order) throw H.httpError(404, 'Order not found.');
+  const v = String(req.body.value || '');
+  if (!['unpaid', 'paid', 'delivered', 'cancelled'].includes(v)) throw H.httpError(400, 'Invalid status.');
+  const today = new Date().toISOString().slice(0, 10);
+  db.exec('BEGIN');
+  try {
+    if (v === 'cancelled') {
+      if (order.inventory_deducted) H.restoreOrderInventory(order.id, req.user);
+      db.prepare("UPDATE orders SET status='cancelled', updated_at=datetime('now') WHERE id=?").run(order.id);
+      db.prepare("UPDATE deliveries SET status='cancelled', updated_at=datetime('now') WHERE order_id=?").run(order.id);
+    } else if (v === 'unpaid') {
+      if (H.orderAllocated(order.id) > 0.004) {
+        throw H.httpError(400, 'This order already has a payment recorded. Delete that payment on the Payments page first, then set it to Unpaid.');
+      }
+      if (order.inventory_deducted) H.restoreOrderInventory(order.id, req.user);
+      db.prepare("UPDATE orders SET status='open', updated_at=datetime('now') WHERE id=?").run(order.id);
+      db.prepare("UPDATE deliveries SET status='pending', delivery_date='', updated_at=datetime('now') WHERE order_id=?").run(order.id);
+    } else if (v === 'paid') {
+      if (order.status === 'cancelled' || order.status === 'refunded') {
+        throw H.httpError(400, 'This order is cancelled. Set it to Unpaid first to reopen it.');
+      }
+      const due = H.round2(H.orderTotal(order.id) - H.orderAllocated(order.id));
+      if (due > 0.004) {
+        const payId = db.prepare('INSERT INTO payments (payment_date, reseller_id, amount, method, notes, created_by) VALUES (?,?,?,?,?,?)')
+          .run(today, order.reseller_id, due, 'Cash', `Marked paid — order #${order.id}`, req.user.id).lastInsertRowid;
+        H.allocatePayment(payId, order.id);
+      }
+    } else if (v === 'delivered') {
+      if (order.status === 'cancelled' || order.status === 'refunded') {
+        throw H.httpError(400, 'This order is cancelled. Set it to Unpaid first to reopen it.');
+      }
+      const due = H.round2(H.orderTotal(order.id) - H.orderAllocated(order.id));
+      if (H.settingBool('require_payment_before_delivery') && due > 0.004) {
+        throw H.httpError(400, 'This order is not fully paid. "Require payment before delivery" is on in Settings.');
+      }
+      if (!order.inventory_deducted) {
+        if (!H.settingBool('allow_backorders')) {
+          for (const it of db.prepare('SELECT * FROM order_items WHERE order_id = ?').all(order.id)) {
+            const p = db.prepare('SELECT name, on_hand FROM products WHERE id = ?').get(it.product_id);
+            if (p.on_hand < it.qty) throw H.httpError(400, `Cannot deliver: not enough stock of "${p.name}" (on hand: ${p.on_hand}, needed: ${it.qty}).`);
+          }
+        }
+        H.deductOrderInventory(order.id, req.user);
+      }
+      db.prepare("UPDATE orders SET status='completed', updated_at=datetime('now') WHERE id=?").run(order.id);
+      db.prepare("UPDATE deliveries SET status='delivered', delivery_date=CASE WHEN delivery_date='' OR delivery_date IS NULL THEN ? ELSE delivery_date END, updated_at=datetime('now') WHERE order_id=?").run(today, order.id);
+    }
+    H.recomputePaymentStatus(order.id);
+    H.audit(req.user, 'status-change', 'order', order.id, `→ ${v}`);
     db.exec('COMMIT');
   } catch (e) { db.exec('ROLLBACK'); throw e; }
   res.json(fetchOrders('WHERE o.id = ?', [order.id])[0]);
