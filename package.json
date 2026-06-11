@@ -1,0 +1,17 @@
+{
+  "name": "peptide-manager",
+  "version": "1.0.0",
+  "description": "Business dashboard for products, inventory, orders, resellers, payments and deliveries",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "reset-db": "node -e \"require('node:fs').rmSync('data',{recursive:true,force:true}); console.log('Database deleted. It will be re-created with seed data on next start.')\""
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "dependencies": {
+    "cookie-parser": "^1.4.7",
+    "express": "^5.2.1"
+  }
+}
