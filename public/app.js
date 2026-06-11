@@ -125,6 +125,24 @@ function badge(kind, value) {
   return `<span class="badge ${color}">${esc(label)}</span>`;
 }
 
+/* One simple status for orders: Unpaid → Paid → Delivered (or Cancelled) */
+const SIMPLE_STATUS = {
+  unpaid: ['yellow', '⚠️ Unpaid'],
+  paid: ['green', '💲 Paid'],
+  delivered: ['dgreen', '✔️ Delivered'],
+  cancelled: ['red', '❌ Cancelled'],
+};
+function orderDisplayStatus(o) {
+  if (o.status === 'cancelled' || o.status === 'refunded') return 'cancelled';
+  if (o.delivery_status === 'delivered') return 'delivered';
+  if (o.payment_status === 'paid') return 'paid';
+  return 'unpaid';
+}
+function statusBadge(o) {
+  const [color, label] = SIMPLE_STATUS[orderDisplayStatus(o)];
+  return `<span class="badge nodot ${color}">${label}</span>`;
+}
+
 /* ================= theme ================= */
 function applyTheme() {
   document.documentElement.dataset.theme = localStorage.getItem('pm-theme') || 'light';
@@ -427,8 +445,7 @@ async function pageDashboard(page) {
     { label: 'Customer', html: r => `<span class="cell-main">${esc(r.customer_name)}</span><div class="cell-sub">${esc(r.reseller_name)}</div>` },
     { label: 'Items', html: r => `<span class="cell-sub">${itemsSummary(r.items)}</span>` },
     { label: 'Total', cls: 'num', html: r => `<b>${money(r.total_revenue)}</b>`, sort: r => r.total_revenue },
-    { label: 'Status', html: r => badge('order', r.status) },
-    { label: 'Payment', html: r => badge('payment', r.payment_status) },
+    { label: 'Status', html: r => statusBadge(r) },
   ];
   renderTable($('#dash-open'), { rows: d.open_orders, empty: 'No open orders. 🎉', columns: miniOrderCols, onRow: r => openOrderDetail(r.id) });
   renderTable($('#dash-recent'), { rows: d.recent_orders, empty: 'No orders yet.', columns: miniOrderCols, onRow: r => openOrderDetail(r.id) });
@@ -460,16 +477,16 @@ async function pageOrders(page) {
       <div class="toolbar">
         <input class="search" id="f-q" placeholder="Search customer, product, notes…" value="${esc(orderFilters.q)}">
         <div class="pill-tabs" id="f-status-tabs">
-          ${['', 'open', 'completed', 'cancelled', 'refunded'].map(s =>
+          ${['', 'unpaid', 'paid', 'delivered', 'cancelled'].map(s =>
             `<button data-s="${s}" class="${orderFilters.status === s ? 'active' : ''}">${s === '' ? 'All' : s[0].toUpperCase() + s.slice(1)}</button>`).join('')}
         </div>
-        <select id="f-pay"><option value="">Payment: all</option>${['unpaid', 'partial', 'paid'].map(s => `<option ${orderFilters.payment_status === s ? 'selected' : ''} value="${s}">${s[0].toUpperCase() + s.slice(1)}</option>`).join('')}</select>
       </div>
       <div id="orders-table"><div class="skeleton-row"></div></div>
     </div>`;
 
   const refresh = async () => {
-    const rows = await api('/orders' + filterQuery());
+    let rows = await api('/orders' + (orderFilters.q ? '?q=' + encodeURIComponent(orderFilters.q) : ''));
+    if (orderFilters.status) rows = rows.filter(r => orderDisplayStatus(r) === orderFilters.status);
     renderTable($('#orders-table'), {
       rows, empty: 'No orders match these filters.',
       columns: [
@@ -481,9 +498,7 @@ async function pageOrders(page) {
         { label: 'Revenue', cls: 'num', html: r => `<b>${money(r.total_revenue)}</b>`, sort: r => r.total_revenue },
         { label: 'Cost', cls: 'num', html: r => money(r.total_cost), sort: r => r.total_cost },
         { label: 'Profit', cls: 'num', html: r => `<span class="${moneyCls(r.total_profit)}">${money(r.total_profit)}</span>`, sort: r => r.total_profit },
-        { label: 'Status', html: r => badge('order', r.status), sort: r => r.status },
-        { label: 'Payment', html: r => badge('payment', r.payment_status), sort: r => r.payment_status },
-        { label: 'Delivery', html: r => badge('delivery', r.delivery_status), sort: r => r.delivery_status || '' },
+        { label: 'Status', html: r => statusBadge(r), sort: r => orderDisplayStatus(r) },
       ],
       onRow: r => openOrderDetail(r.id, refresh),
       defaultSort: 1, defaultDir: -1,
@@ -496,8 +511,7 @@ async function pageOrders(page) {
     $$('#f-status-tabs button').forEach(x => x.classList.remove('active'));
     b.classList.add('active'); orderFilters.status = b.dataset.s; refresh();
   }));
-  $('#f-pay').addEventListener('change', e => { orderFilters.payment_status = e.target.value; refresh(); });
-  $('#export-orders').onclick = () => { window.location.href = '/api/export/orders.csv' + filterQuery(); };
+  $('#export-orders').onclick = () => { window.location.href = '/api/export/orders.csv' + (orderFilters.q ? '?q=' + encodeURIComponent(orderFilters.q) : ''); };
   $('#new-order').onclick = () => openOrderForm(null, refresh);
   await refresh();
 }
@@ -670,7 +684,7 @@ async function openOrderDetail(orderId, onChanged) {
     <div class="modal-head"><h2>Order #${o.id} — ${esc(o.customer_name)}</h2><button class="modal-x">✕</button></div>
     <div class="modal-body">
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
-        ${badge('order', o.status)} ${badge('payment', o.payment_status)} ${badge('delivery', o.delivery_status)}
+        ${statusBadge(o)}
       </div>
       <div class="table-wrap" style="margin-bottom:12px"><table>
         <thead><tr><th>Product</th><th class="num">Qty</th><th class="num">Retail</th><th class="num">Disc %</th><th class="num">Final</th><th class="num">Revenue</th><th class="num">Cost</th><th class="num">Profit</th></tr></thead>
@@ -685,14 +699,10 @@ async function openOrderDetail(orderId, onChanged) {
         <span>Profit: <b class="${moneyCls(o.total_profit)}">${money(o.total_profit)}</b></span>
         <span>Paid: <b>${money(o.paid_amount)}</b></span><span>Due: <b class="${o.balance_due > 0 ? 'neg' : 'pos'}">${money(o.balance_due)}</b></span>
       </div>
-      <div class="form-row">
-        <div class="field"><label>Order status</label>
-          <select id="od-status">${['open', 'completed', 'cancelled', 'refunded'].map(s => `<option value="${s}" ${o.status === s ? 'selected' : ''}>${s[0].toUpperCase() + s.slice(1)}</option>`).join('')}</select>
-          <div class="hint">Completing deducts stock. Cancel/refund restores it.</div></div>
-        <div class="field"><label>Delivery status</label>
-          <select id="od-delivery">${['pending', 'packed', 'out_for_delivery', 'delivered', 'cancelled'].map(s => `<option value="${s}" ${o.delivery_status === s ? 'selected' : ''}>${s.replace(/_/g, ' ')}</option>`).join('')}</select>
-          <div class="hint">Delivered also completes the order & deducts stock.</div></div>
-      </div>
+      <div class="field"><label>Status</label>
+        <select id="od-set">${['unpaid', 'paid', 'delivered', 'cancelled'].map(s =>
+          `<option value="${s}" ${orderDisplayStatus(o) === s ? 'selected' : ''}>${SIMPLE_STATUS[s][1]}</option>`).join('')}</select>
+        <div class="hint">Paid records a payment for the balance · Delivered deducts stock · Cancelled puts stock back.</div></div>
       <dl class="kv">
         <dt>Reseller</dt><dd>${esc(o.reseller_name)}</dd>
         <dt>Order date</dt><dd>${fmtDate(o.order_date)}</dd>
@@ -709,27 +719,17 @@ async function openOrderDetail(orderId, onChanged) {
       <div class="left">
         <button class="btn danger sm" id="od-delete">Delete</button>
         <button class="btn sm" id="od-edit">✏️ Edit</button>
-        ${o.balance_due > 0 ? '<button class="btn sm" id="od-paid">Mark paid</button>' : ''}
       </div>
       <button class="btn" id="od-close">Close</button>
     </div>`, { wide: true });
 
   const changed = async () => { await loadProducts(true); m.close(); onChanged && onChanged(); };
   $('#od-close', m.el).onclick = m.close;
-  $('#od-status', m.el).addEventListener('change', e => guard(e.target, async () => {
-    try { await api(`/orders/${o.id}/status`, { method: 'PATCH', body: { status: e.target.value } }); toast('Order status updated'); await changed(); }
-    catch (err) { toast(err.message, 'error'); e.target.value = o.status; }
-  }));
-  $('#od-delivery', m.el).addEventListener('change', e => guard(e.target, async () => {
-    try { await api(`/orders/${o.id}/delivery`, { method: 'PATCH', body: { status: e.target.value } }); toast('Delivery status updated'); await changed(); }
-    catch (err) { toast(err.message, 'error'); e.target.value = o.delivery_status; }
+  $('#od-set', m.el).addEventListener('change', e => guard(e.target, async () => {
+    try { await api(`/orders/${o.id}/set-status`, { method: 'PATCH', body: { value: e.target.value } }); toast('Order updated'); await changed(); }
+    catch (err) { toast(err.message, 'error'); e.target.value = orderDisplayStatus(o); }
   }));
   $('#od-edit', m.el).onclick = () => { m.close(); openOrderForm(o, onChanged); };
-  const paidBtn = $('#od-paid', m.el);
-  if (paidBtn) paidBtn.onclick = e => guard(e.target, async () => {
-    try { await api(`/orders/${o.id}/mark-paid`, { method: 'POST', body: {} }); toast('Payment recorded'); await changed(); }
-    catch (err) { toast(err.message, 'error'); }
-  });
   $('#od-delete', m.el).onclick = async e => {
     const ok = await confirmDialog({
       title: `Delete order #${o.id}?`,
@@ -748,7 +748,6 @@ async function openOrderDetail(orderId, onChanged) {
 ====================================================================== */
 async function pageInventory(page) {
   let products = await loadProducts(true);
-  const cats = [...new Set(products.map(p => p.category).filter(Boolean))].sort();
   page.innerHTML = `
     <div class="page-head"><div><h1>Inventory</h1><div class="page-sub">Products, pricing and stock levels</div></div>
       <div class="head-actions">
@@ -758,32 +757,27 @@ async function pageInventory(page) {
     <div class="panel">
       <div class="toolbar">
         <input class="search" id="i-q" placeholder="Search products…">
-        <select id="i-cat"><option value="">Category: all</option>${cats.map(c => `<option>${esc(c)}</option>`).join('')}</select>
         <select id="i-stock"><option value="">Stock: all</option><option value="in_stock">In stock</option><option value="low_stock">Low stock</option><option value="out_of_stock">Out of stock</option></select>
       </div>
       <div id="inv-table"></div>
     </div>`;
 
-  const filters = { q: '', cat: '', stock: '' };
+  const filters = { q: '', stock: '' };
   function draw() {
     const rows = products.filter(p =>
-      (!filters.q || p.name.toLowerCase().includes(filters.q) || (p.supplier || '').toLowerCase().includes(filters.q)) &&
-      (!filters.cat || p.category === filters.cat) &&
+      (!filters.q || p.name.toLowerCase().includes(filters.q) || (p.description || '').toLowerCase().includes(filters.q)) &&
       (!filters.stock || p.stock_status === filters.stock));
     renderTable($('#inv-table'), {
-      rows, empty: 'No products match.', defaultSort: 7, defaultDir: -1,
+      rows, empty: 'No products match.', defaultSort: 6, defaultDir: -1,
       columns: [
         { label: 'Product', html: r => `<span class="cell-main">${esc(r.name)}</span>${(r.description || r.notes) ? `<div class="cell-sub">${esc(r.description || r.notes)}</div>` : ''}`, sort: r => r.name },
-        { label: 'Category', html: r => esc(r.category || '—'), sort: r => r.category || '' },
         { label: 'Cost', cls: 'num', html: r => money(r.cost), sort: r => r.cost },
-        { label: 'Wholesale', cls: 'num', html: r => money(r.wholesale_price), sort: r => r.wholesale_price },
         { label: 'Retail', cls: 'num', html: r => `<b>${money(r.retail_price)}</b>`, sort: r => r.retail_price },
+        { label: 'Reseller price', cls: 'num', html: r => money(round2(r.retail_price * (1 - (Number(S.settings.default_discount_pct) || 0) / 100))), sort: r => r.retail_price },
         { label: 'On hand', cls: 'num', html: r => String(r.on_hand), sort: r => r.on_hand },
         { label: 'Reserved', cls: 'num', html: r => r.reserved ? `<span class="badge yellow">${r.reserved}</span>` : '<span class="muted">0</span>', sort: r => r.reserved },
         { label: 'Available', cls: 'num', html: r => `<b>${r.available}</b>`, sort: r => r.available },
-        { label: 'Low @', cls: 'num', html: r => String(r.low_stock_threshold) },
         { label: 'Status', html: r => badge('stock', r.stock_status), sort: r => r.stock_status },
-        { label: 'Supplier', html: r => esc(r.supplier || '—') },
         {
           label: '', cls: 'nowrap', html: r => `
           <button class="btn sm" data-act="adjust" data-id="${r.id}">± Stock</button>
@@ -802,7 +796,6 @@ async function pageInventory(page) {
   }
   async function reload() { products = await loadProducts(true); draw(); }
   $('#i-q').addEventListener('input', debounce(e => { filters.q = e.target.value.toLowerCase(); draw(); }, 200));
-  $('#i-cat').addEventListener('change', e => { filters.cat = e.target.value; draw(); });
   $('#i-stock').addEventListener('change', e => { filters.stock = e.target.value; draw(); });
   $('#export-inv').onclick = () => { window.location.href = '/api/export/inventory.csv'; };
   $('#add-product').onclick = () => openProductForm(null, reload);
@@ -819,20 +812,11 @@ function openProductForm(p, onSaved) {
       <div class="field"><label>Short description</label><input name="description" value="${esc(p?.description || '')}" placeholder="e.g. Recovery and injury repair">
         <div class="hint">Shown to resellers on their price list.</div></div>
       <div class="form-row">
-        <div class="field"><label>Category</label><input name="category" value="${esc(p?.category || '')}" placeholder="Peptide / Blend / Supplies" list="cat-list">
-          <datalist id="cat-list"><option>Peptide</option><option>Blend</option><option>Supplies</option></datalist></div>
-        <div class="field"><label>Supplier</label><input name="supplier" value="${esc(p?.supplier || '')}" placeholder="Optional"></div>
-      </div>
-      <div class="form-row-3">
         <div class="field"><label>Cost / unit <span class="req">*</span></label><input name="cost" type="number" min="0" step="0.01" inputmode="decimal" value="${p ? p.cost : ''}" placeholder="0.00"></div>
-        <div class="field"><label>Wholesale price <span class="req">*</span></label><input name="wholesale_price" type="number" min="0" step="0.01" inputmode="decimal" value="${p ? p.wholesale_price : ''}" placeholder="0.00"></div>
         <div class="field"><label>Retail price <span class="req">*</span></label><input name="retail_price" type="number" min="0" step="0.01" inputmode="decimal" value="${p ? p.retail_price : ''}" placeholder="0.00"></div>
       </div>
-      <div class="form-row">
-        <div class="field"><label>On hand</label><input name="on_hand" type="number" step="1" inputmode="numeric" value="${p ? p.on_hand : 0}">
-          ${isEdit ? '<div class="hint">Changing this logs a manual stock adjustment.</div>' : ''}</div>
-        <div class="field"><label>Low stock threshold</label><input name="low_stock_threshold" type="number" min="0" step="1" inputmode="numeric" value="${p ? p.low_stock_threshold : (S.settings?.low_stock_default_threshold ?? 3)}"></div>
-      </div>
+      <div class="field"><label>On hand</label><input name="on_hand" type="number" step="1" inputmode="numeric" value="${p ? p.on_hand : 0}">
+        ${isEdit ? '<div class="hint">Changing this logs a manual stock adjustment.</div>' : ''}</div>
       <div class="field"><label>Notes</label><textarea name="notes">${esc(p?.notes || '')}</textarea></div>
     </form></div>
     <div class="modal-foot">
@@ -845,13 +829,13 @@ function openProductForm(p, onSaved) {
     try {
       const f = form;
       if (!f.name.value.trim()) throw new Error('Product name is required.');
-      for (const k of ['cost', 'wholesale_price', 'retail_price']) {
-        if (f[k].value === '' || Number(f[k].value) < 0) throw new Error('Cost, wholesale and retail prices are all required (0 or more). Blank prices break order math.');
+      for (const k of ['cost', 'retail_price']) {
+        if (f[k].value === '' || Number(f[k].value) < 0) throw new Error('Cost and retail price are both required (0 or more). Blank prices break order math.');
       }
       const body = {
-        name: f.name.value.trim(), category: f.category.value.trim(), supplier: f.supplier.value.trim(),
-        cost: Number(f.cost.value), wholesale_price: Number(f.wholesale_price.value), retail_price: Number(f.retail_price.value),
-        on_hand: Number(f.on_hand.value || 0), low_stock_threshold: Number(f.low_stock_threshold.value || 0), notes: f.notes.value,
+        name: f.name.value.trim(),
+        cost: Number(f.cost.value), retail_price: Number(f.retail_price.value),
+        on_hand: Number(f.on_hand.value || 0), notes: f.notes.value,
         description: f.description.value.trim(),
       };
       if (isEdit) await api(`/products/${p.id}`, { method: 'PUT', body });
@@ -1304,7 +1288,7 @@ async function pageSettings(page) {
             <div class="field"><label>Currency code</label><input name="currency" value="${esc(settings.currency)}" placeholder="USD"></div>
             <div class="field"><label>Currency symbol</label><input name="currency_symbol" value="${esc(settings.currency_symbol)}" placeholder="$"></div>
           </div>
-          <div class="field"><label>Default low-stock threshold</label><input name="low_stock_default_threshold" type="number" min="0" step="1" value="${esc(settings.low_stock_default_threshold)}"></div>
+          <div class="field"><label>Low-stock threshold (applies to all products)</label><input name="low_stock_default_threshold" type="number" min="0" step="1" value="${esc(settings.low_stock_default_threshold)}"></div>
           ${sw('allow_backorders', 'Allow backorders', 'Let orders exceed available stock')}
           ${sw('require_payment_before_delivery', 'Require payment before delivery', 'Orders must be fully paid before they can be marked delivered')}
           ${sw('show_profit_to_resellers', 'Show profit to resellers', 'Off by default — resellers never see your cost')}
@@ -1429,9 +1413,7 @@ async function pageResellerHome(page) {
       { label: 'Customer', html: r => `<span class="cell-main">${esc(r.customer_name)}</span><div class="cell-sub">${itemsSummary(r.items)}</div>` },
       { label: 'Total', cls: 'num', html: r => `<b>${money(r.total_revenue)}</b>` },
       ...(showProfit ? [{ label: 'Profit', cls: 'num', html: r => `<span class="${moneyCls(r.total_profit)}">${money(r.total_profit)}</span>` }] : []),
-      { label: 'Status', html: r => badge('order', r.status) },
-      { label: 'Payment', html: r => badge('payment', r.payment_status) },
-      { label: 'Delivery', html: r => badge('delivery', r.delivery_status) },
+      { label: 'Status', html: r => statusBadge(r) },
     ],
   });
 }
@@ -1537,14 +1519,14 @@ async function pageResellerOrders(page) {
       <div class="head-actions"><a class="btn primary" href="#/new-order">＋ New order</a></div></div>
     <div class="panel">
       <div class="toolbar"><div class="pill-tabs" id="ro-tabs">
-        <button class="active" data-s="">All</button><button data-s="open">Open</button><button data-s="completed">Completed</button>
+        <button class="active" data-s="">All</button><button data-s="unpaid">Unpaid</button><button data-s="paid">Paid</button><button data-s="delivered">Delivered</button><button data-s="cancelled">Cancelled</button>
       </div><input class="search" id="ro-q" placeholder="Search customer…"></div>
       <div id="ro-table"></div>
     </div>`;
 
   let statusFilter = '', q = '';
   function draw() {
-    const rows = d.orders.filter(o => (!statusFilter || o.status === statusFilter) && (!q || o.customer_name.toLowerCase().includes(q)));
+    const rows = d.orders.filter(o => (!statusFilter || orderDisplayStatus(o) === statusFilter) && (!q || o.customer_name.toLowerCase().includes(q)));
     renderTable($('#ro-table'), {
       rows, empty: 'No orders here yet.',
       columns: [
@@ -1554,9 +1536,7 @@ async function pageResellerOrders(page) {
         { label: 'Total', cls: 'num', html: r => `<b>${money(r.total_revenue)}</b>`, sort: r => r.total_revenue },
         { label: 'Owed', cls: 'num', html: r => r.balance_due > 0 ? `<span class="neg">${money(r.balance_due)}</span>` : `<span class="pos">${money(0)}</span>`, sort: r => r.balance_due },
         ...(showProfit ? [{ label: 'Profit', cls: 'num', html: r => money(r.total_profit) }] : []),
-        { label: 'Status', html: r => badge('order', r.status) },
-        { label: 'Payment', html: r => badge('payment', r.payment_status) },
-        { label: 'Delivery', html: r => badge('delivery', r.delivery_status) },
+        { label: 'Status', html: r => statusBadge(r) },
         { label: 'Notes', html: r => `<span class="cell-sub">${esc(r.notes || '—')}</span>` },
       ],
       defaultSort: 0, defaultDir: -1,
@@ -1583,10 +1563,9 @@ async function pageResellerPrices(page) {
   function draw() {
     const rows = data.products.filter(p => !q || p.name.toLowerCase().includes(q));
     renderTable($('#pl-table'), {
-      rows, empty: 'No products found.', defaultSort: 3, defaultDir: -1,
+      rows, empty: 'No products found.', defaultSort: 2, defaultDir: -1,
       columns: [
         { label: 'Product', html: r => `<span class="cell-main">${esc(r.name)}</span>${r.description ? `<div class="cell-sub">${esc(r.description)}</div>` : ''}`, sort: r => r.name },
-        { label: 'Category', html: r => esc(r.category || '—'), sort: r => r.category || '' },
         { label: 'Your price', cls: 'num', html: r => `<b>${money(r.your_price)}</b>`, sort: r => r.your_price },
         { label: 'In stock', cls: 'num', html: r => `${badge('stock', r.stock_status)} <b style="margin-left:6px">${Math.max(0, r.available)}</b>`, sort: r => r.available },
       ],
