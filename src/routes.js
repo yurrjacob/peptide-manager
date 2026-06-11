@@ -540,6 +540,30 @@ router.put('/resellers/:id', requireAdmin, (req, res) => {
   res.json(resellerRow(db.prepare('SELECT * FROM resellers WHERE id = ?').get(existing.id)));
 });
 
+// Delete a reseller. Their orders/payments are moved to the PAST ORDERS archive
+// so history and balances stay intact; their login is removed.
+router.delete('/resellers/:id', requireAdmin, (req, res) => {
+  const r = db.prepare('SELECT * FROM resellers WHERE id = ?').get(Number(req.params.id));
+  if (!r) throw H.httpError(404, 'Reseller not found.');
+  if (r.name === 'PAST ORDERS') throw H.httpError(400, 'PAST ORDERS is the archive account and cannot be deleted.');
+  const hasData = db.prepare('SELECT (SELECT COUNT(*) FROM orders WHERE reseller_id = ?) + (SELECT COUNT(*) FROM payments WHERE reseller_id = ?) AS c')
+    .get(r.id, r.id).c > 0;
+  db.exec('BEGIN');
+  try {
+    if (hasData) {
+      let past = db.prepare("SELECT id FROM resellers WHERE name = 'PAST ORDERS'").get();
+      if (!past) past = { id: db.prepare("INSERT INTO resellers (name, discount_pct, notes) VALUES ('PAST ORDERS', 0, 'Archive account')").run().lastInsertRowid };
+      db.prepare("UPDATE orders SET reseller_id = ?, updated_at = datetime('now') WHERE reseller_id = ?").run(past.id, r.id);
+      db.prepare('UPDATE payments SET reseller_id = ? WHERE reseller_id = ?').run(past.id, r.id);
+    }
+    db.prepare("DELETE FROM users WHERE reseller_id = ? AND role = 'reseller'").run(r.id);
+    db.prepare('DELETE FROM resellers WHERE id = ?').run(r.id);
+    H.audit(req.user, 'delete', 'reseller', r.id, `${r.name}${hasData ? ' (orders moved to PAST ORDERS)' : ''}`);
+    db.exec('COMMIT');
+  } catch (e) { db.exec('ROLLBACK'); throw e; }
+  res.json({ ok: true, moved: hasData });
+});
+
 // Create or update reseller login; reset password; enable/disable login
 router.post('/resellers/:id/login', requireAdmin, (req, res) => {
   const r = db.prepare('SELECT * FROM resellers WHERE id = ?').get(Number(req.params.id));
