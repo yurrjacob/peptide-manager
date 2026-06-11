@@ -375,6 +375,7 @@ async function pageDashboard(page) {
     <div class="cards">
       <div class="stat good"><div class="lbl">Total revenue</div><div class="val">${money(c.total_revenue)}</div><div class="sub">${c.completed_orders} completed order${c.completed_orders === 1 ? '' : 's'}</div></div>
       <div class="stat ${c.total_profit < 0 ? 'bad' : 'good'}"><div class="lbl">Total profit</div><div class="val">${money(c.total_profit)}</div><div class="sub">after ${money(c.total_cost)} cost</div></div>
+      <div class="stat ${c.cash_profit < 0 ? 'bad' : 'good'}"><div class="lbl">Cash profit</div><div class="val">${money(c.cash_profit)}</div><div class="sub">revenue − ${money(c.expenses_total)} spent</div></div>
       <div class="stat ${c.amount_owed > 0 ? 'warn' : 'good'}"><div class="lbl">Owed to you</div><div class="val">${money(c.amount_owed)}</div><div class="sub">unpaid reseller balances</div></div>
       <div class="stat ${c.open_orders > 0 ? 'warn' : ''}"><div class="lbl">Open orders</div><div class="val">${c.open_orders}</div><div class="sub">worth ${money(c.open_value)}</div></div>
       <div class="stat"><div class="lbl">Inventory value</div><div class="val">${money(c.inventory_at_cost)}</div><div class="sub">${money(c.inventory_at_retail)} at retail</div></div>
@@ -410,7 +411,9 @@ async function pageDashboard(page) {
     <div class="panel"><div class="panel-head"><h2>Open orders</h2><a class="btn sm" href="#/orders">All orders</a></div>
       <div id="dash-open"></div></div>
     <div class="panel"><div class="panel-head"><h2>Low stock products</h2><a class="btn sm" href="#/inventory">View inventory</a></div>
-      <div id="dash-lowstock"></div></div>`;
+      <div id="dash-lowstock"></div></div>
+    <div class="panel"><div class="panel-head"><h2>Expenses (money out)</h2><button class="btn sm primary" id="add-exp">＋ Log expense</button></div>
+      <div id="dash-exp"></div></div>`;
 
   renderTable($('#dash-lowstock'), {
     rows: d.low_stock.slice(0, 10),
@@ -430,6 +433,54 @@ async function pageDashboard(page) {
     { label: 'Status', html: r => statusBadge(r) },
   ];
   renderTable($('#dash-open'), { rows: d.open_orders, empty: 'No open orders. 🎉', columns: miniOrderCols, onRow: r => openOrderDetail(r.id) });
+
+  renderTable($('#dash-exp'), {
+    rows: d.expenses, empty: 'No expenses yet. Log one when you buy inventory or supplies.', emptyIcon: '💸',
+    columns: [
+      { label: 'Date', html: r => fmtDate(r.expense_date), sort: r => r.expense_date },
+      { label: 'Amount', cls: 'num', html: r => `<b class="neg">−${money(r.amount)}</b>`, sort: r => r.amount },
+      { label: 'Note', html: r => esc(r.note || '—') },
+      { label: '', html: r => `<button class="btn sm danger" data-delexp="${r.id}">Delete</button>` },
+    ],
+    afterDraw(container) {
+      $$('button[data-delexp]', container).forEach(b => b.addEventListener('click', async () => {
+        const x = d.expenses.find(e => e.id === Number(b.dataset.delexp));
+        const ok = await confirmDialog({ title: 'Delete expense?', message: `Remove the ${money(x.amount)} expense${x.note ? ` (${x.note})` : ''}? Cash profit will go back up by that amount.` });
+        if (!ok) return;
+        try { await api(`/expenses/${x.id}`, { method: 'DELETE' }); toast('Expense deleted'); pageDashboard(page); }
+        catch (err) { toast(err.message, 'error'); }
+      }));
+    },
+  });
+  $('#add-exp').onclick = () => openExpenseForm(() => pageDashboard(page));
+}
+
+function openExpenseForm(onSaved) {
+  const m = openModal(`
+    <div class="modal-head"><h2>Log expense</h2><button class="modal-x">✕</button></div>
+    <div class="modal-body"><form id="exp-form" novalidate>
+      <div class="form-error"></div>
+      <div class="form-row">
+        <div class="field"><label>Amount <span class="req">*</span></label><input name="amount" type="number" min="0.01" step="0.01" inputmode="decimal" placeholder="0.00"></div>
+        <div class="field"><label>Date</label><input name="expense_date" type="date" value="${today()}"></div>
+      </div>
+      <div class="field"><label>What was it for?</label><input name="note" placeholder="e.g. Inventory restock, shipping, supplies"></div>
+      <div class="hint">Expenses lower your Cash profit card (revenue minus money spent). Product cost-per-unit is separate — that's already counted in Total profit when items sell.</div>
+    </form></div>
+    <div class="modal-foot">
+      <button class="btn" id="exp-cancel">Cancel</button>
+      <button class="btn primary" id="exp-save">Log expense</button>
+    </div>`);
+  const form = $('#exp-form', m.el);
+  $('#exp-cancel', m.el).onclick = m.close;
+  $('#exp-save', m.el).onclick = e => guard(e.target, async () => {
+    try {
+      const amount = Number(form.amount.value);
+      if (!Number.isFinite(amount) || amount <= 0) throw new Error('Enter an amount greater than zero.');
+      await api('/expenses', { method: 'POST', body: { amount, expense_date: form.expense_date.value, note: form.note.value } });
+      m.close(); toast('Expense logged'); onSaved && onSaved();
+    } catch (err) { showFormError(form, err.message); }
+  });
 }
 
 /* ======================================================================
