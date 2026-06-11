@@ -662,6 +662,25 @@ router.delete('/payments/:id', requireAdmin, (req, res) => {
   res.json({ ok: true });
 });
 
+/* ============ expenses (admin) ============ */
+router.post('/expenses', requireAdmin, (req, res) => {
+  const amount = H.round2(Number(req.body.amount));
+  if (!Number.isFinite(amount) || amount <= 0) throw H.httpError(400, 'Expense amount must be greater than zero.');
+  const date = isDate(req.body.expense_date) ? req.body.expense_date : new Date().toISOString().slice(0, 10);
+  const id = db.prepare('INSERT INTO expenses (expense_date, amount, note, created_by) VALUES (?,?,?,?)')
+    .run(date, amount, str(req.body.note, 300), req.user.id).lastInsertRowid;
+  H.audit(req.user, 'create', 'expense', id, `$${amount.toFixed(2)} ${str(req.body.note, 100)}`);
+  res.json({ ok: true, id });
+});
+
+router.delete('/expenses/:id', requireAdmin, (req, res) => {
+  const e = db.prepare('SELECT * FROM expenses WHERE id = ?').get(Number(req.params.id));
+  if (!e) throw H.httpError(404, 'Expense not found.');
+  db.prepare('DELETE FROM expenses WHERE id = ?').run(e.id);
+  H.audit(req.user, 'delete', 'expense', e.id, `$${e.amount.toFixed(2)} ${e.note || ''}`);
+  res.json({ ok: true });
+});
+
 /* ============ dashboard (admin) ============ */
 router.get('/dashboard', requireAdmin, (req, res) => {
   const completed = db.prepare(`
@@ -674,6 +693,7 @@ router.get('/dashboard', requireAdmin, (req, res) => {
            SUM(CASE WHEN status='open' THEN 1 ELSE 0 END) AS open FROM orders`).get();
   const inv = db.prepare(`SELECT IFNULL(SUM(on_hand*cost),0) AS at_cost, IFNULL(SUM(on_hand*retail_price),0) AS at_retail FROM products WHERE active = 1`).get();
   const owed = db.prepare('SELECT id FROM resellers').all().reduce((s, r) => H.round2(s + H.resellerBalance(r.id)), 0);
+  const expensesTotal = db.prepare('SELECT IFNULL(SUM(amount),0) AS t FROM expenses').get().t;
 
   const monthly = db.prepare(`
     SELECT substr(o.order_date,1,7) AS month, IFNULL(SUM(oi.revenue),0) AS revenue, IFNULL(SUM(oi.profit),0) AS profit
@@ -701,10 +721,13 @@ router.get('/dashboard', requireAdmin, (req, res) => {
       open_value: H.round2(open.value), amount_owed: owed,
       completed_orders: counts.completed || 0, open_orders: counts.open || 0,
       inventory_at_cost: H.round2(inv.at_cost), inventory_at_retail: H.round2(inv.at_retail),
-      low_stock_count: lowStock.length
+      low_stock_count: lowStock.length,
+      expenses_total: H.round2(expensesTotal),
+      cash_profit: H.round2(completed.revenue - expensesTotal)
     },
     monthly, top_products: topProducts, top_resellers: topResellers,
-    low_stock: lowStock, recent_orders: recentOrders, open_orders: openOrders
+    low_stock: lowStock, recent_orders: recentOrders, open_orders: openOrders,
+    expenses: db.prepare('SELECT * FROM expenses ORDER BY expense_date DESC, id DESC LIMIT 100').all()
   });
 });
 

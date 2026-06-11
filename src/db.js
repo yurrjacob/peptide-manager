@@ -13,6 +13,14 @@ db.exec('PRAGMA foreign_keys = ON;');
 // Migrations for databases created by older versions
 function migrate() {
   try { db.exec("ALTER TABLE products ADD COLUMN description TEXT DEFAULT ''"); } catch { /* column already exists */ }
+  db.exec(`CREATE TABLE IF NOT EXISTS expenses (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    expense_date TEXT NOT NULL,
+    amount       REAL NOT NULL CHECK (amount > 0),
+    note         TEXT DEFAULT '',
+    created_by   INTEGER,
+    created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+  );`);
 }
 
 db.exec(`

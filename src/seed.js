@@ -1,6 +1,6 @@
 'use strict';
 const db = require('./db');
-const { hashPassword, computeLine, setSetting, SETTING_DEFAULTS, recomputePaymentStatus, allocatePayment, round2 } = require('./helpers');
+const { hashPassword, computeLine, setSetting, getSetting, SETTING_DEFAULTS, recomputePaymentStatus, allocatePayment, round2 } = require('./helpers');
 
 const PRODUCTS = [
   // [name, category, cost, wholesale, retail, on_hand]
@@ -193,4 +193,12 @@ function archivePastOrders() {
   } catch (e) { db.exec('ROLLBACK'); throw e; }
 }
 
-module.exports = { seedIfEmpty, backfillDescriptions, archivePastOrders };
+// One-time: log the $509 inventory restock as the first expense.
+function seedInitialExpense() {
+  if (getSetting('initial_expense_logged') === '1') return;
+  db.prepare("INSERT INTO expenses (expense_date, amount, note) VALUES (?, ?, ?)")
+    .run('2026-06-11', 509, 'Inventory restock');
+  setSetting('initial_expense_logged', '1');
+}
+
+module.exports = { seedIfEmpty, backfillDescriptions, archivePastOrders, seedInitialExpense };
