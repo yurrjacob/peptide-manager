@@ -447,9 +447,11 @@ function filterQuery() {
 }
 
 async function pageOrders(page) {
-  const [products, resellers] = await Promise.all([loadProducts(), loadResellers()]);
+  // simple filters only: search, status tabs, payment dropdown
+  orderFilters.delivery_status = ''; orderFilters.reseller_id = ''; orderFilters.product_id = '';
+  orderFilters.date_from = ''; orderFilters.date_to = '';
   page.innerHTML = `
-    <div class="page-head"><div><h1>Orders</h1><div class="page-sub">Search, filter and manage every order</div></div>
+    <div class="page-head"><div><h1>Orders</h1><div class="page-sub">Search and manage every order</div></div>
       <div class="head-actions">
         <button class="btn" id="export-orders">⬇️ Export CSV</button>
         <button class="btn primary" id="new-order">＋ New order</button>
@@ -457,14 +459,11 @@ async function pageOrders(page) {
     <div class="panel">
       <div class="toolbar">
         <input class="search" id="f-q" placeholder="Search customer, product, notes…" value="${esc(orderFilters.q)}">
-        <select id="f-status"><option value="">Status: all</option>${['open', 'completed', 'cancelled', 'refunded'].map(s => `<option ${orderFilters.status === s ? 'selected' : ''} value="${s}">${s}</option>`).join('')}</select>
-        <select id="f-pay"><option value="">Payment: all</option>${['unpaid', 'partial', 'paid'].map(s => `<option ${orderFilters.payment_status === s ? 'selected' : ''} value="${s}">${s}</option>`).join('')}</select>
-        <select id="f-del"><option value="">Delivery: all</option>${['pending', 'packed', 'out_for_delivery', 'delivered', 'cancelled'].map(s => `<option ${orderFilters.delivery_status === s ? 'selected' : ''} value="${s}">${s.replace(/_/g, ' ')}</option>`).join('')}</select>
-        <select id="f-reseller"><option value="">Reseller: all</option>${resellers.map(r => `<option ${String(orderFilters.reseller_id) === String(r.id) ? 'selected' : ''} value="${r.id}">${esc(r.name)}</option>`).join('')}</select>
-        <select id="f-product"><option value="">Product: all</option>${products.map(p => `<option ${String(orderFilters.product_id) === String(p.id) ? 'selected' : ''} value="${p.id}">${esc(p.name)}</option>`).join('')}</select>
-        <input type="date" id="f-from" title="From date" value="${esc(orderFilters.date_from)}">
-        <input type="date" id="f-to" title="To date" value="${esc(orderFilters.date_to)}">
-        <button class="btn sm" id="f-clear">Clear</button>
+        <div class="pill-tabs" id="f-status-tabs">
+          ${['', 'open', 'completed', 'cancelled', 'refunded'].map(s =>
+            `<button data-s="${s}" class="${orderFilters.status === s ? 'active' : ''}">${s === '' ? 'All' : s[0].toUpperCase() + s.slice(1)}</button>`).join('')}
+        </div>
+        <select id="f-pay"><option value="">Payment: all</option>${['unpaid', 'partial', 'paid'].map(s => `<option ${orderFilters.payment_status === s ? 'selected' : ''} value="${s}">${s[0].toUpperCase() + s.slice(1)}</option>`).join('')}</select>
       </div>
       <div id="orders-table"><div class="skeleton-row"></div></div>
     </div>`;
@@ -493,10 +492,11 @@ async function pageOrders(page) {
 
   const onFilter = debounce(refresh, 250);
   $('#f-q').addEventListener('input', e => { orderFilters.q = e.target.value; onFilter(); });
-  const bind = (id, key) => $(id).addEventListener('change', e => { orderFilters[key] = e.target.value; refresh(); });
-  bind('#f-status', 'status'); bind('#f-pay', 'payment_status'); bind('#f-del', 'delivery_status');
-  bind('#f-reseller', 'reseller_id'); bind('#f-product', 'product_id'); bind('#f-from', 'date_from'); bind('#f-to', 'date_to');
-  $('#f-clear').onclick = () => { Object.keys(orderFilters).forEach(k => orderFilters[k] = ''); pageOrders(page); };
+  $$('#f-status-tabs button').forEach(b => b.addEventListener('click', () => {
+    $$('#f-status-tabs button').forEach(x => x.classList.remove('active'));
+    b.classList.add('active'); orderFilters.status = b.dataset.s; refresh();
+  }));
+  $('#f-pay').addEventListener('change', e => { orderFilters.payment_status = e.target.value; refresh(); });
   $('#export-orders').onclick = () => { window.location.href = '/api/export/orders.csv' + filterQuery(); };
   $('#new-order').onclick = () => openOrderForm(null, refresh);
   await refresh();
@@ -771,9 +771,9 @@ async function pageInventory(page) {
       (!filters.cat || p.category === filters.cat) &&
       (!filters.stock || p.stock_status === filters.stock));
     renderTable($('#inv-table'), {
-      rows, empty: 'No products match.', defaultSort: 0,
+      rows, empty: 'No products match.', defaultSort: 7, defaultDir: -1,
       columns: [
-        { label: 'Product', html: r => `<span class="cell-main">${esc(r.name)}</span>${r.notes ? `<div class="cell-sub">${esc(r.notes)}</div>` : ''}`, sort: r => r.name },
+        { label: 'Product', html: r => `<span class="cell-main">${esc(r.name)}</span>${(r.description || r.notes) ? `<div class="cell-sub">${esc(r.description || r.notes)}</div>` : ''}`, sort: r => r.name },
         { label: 'Category', html: r => esc(r.category || '—'), sort: r => r.category || '' },
         { label: 'Cost', cls: 'num', html: r => money(r.cost), sort: r => r.cost },
         { label: 'Wholesale', cls: 'num', html: r => money(r.wholesale_price), sort: r => r.wholesale_price },
@@ -816,6 +816,8 @@ function openProductForm(p, onSaved) {
     <div class="modal-body"><form id="p-form" novalidate>
       <div class="form-error"></div>
       <div class="field"><label>Name <span class="req">*</span></label><input name="name" value="${esc(p?.name || '')}" placeholder="e.g. BPC-157 (10 mg)"></div>
+      <div class="field"><label>Short description</label><input name="description" value="${esc(p?.description || '')}" placeholder="e.g. Recovery and injury repair">
+        <div class="hint">Shown to resellers on their price list.</div></div>
       <div class="form-row">
         <div class="field"><label>Category</label><input name="category" value="${esc(p?.category || '')}" placeholder="Peptide / Blend / Supplies" list="cat-list">
           <datalist id="cat-list"><option>Peptide</option><option>Blend</option><option>Supplies</option></datalist></div>
@@ -850,6 +852,7 @@ function openProductForm(p, onSaved) {
         name: f.name.value.trim(), category: f.category.value.trim(), supplier: f.supplier.value.trim(),
         cost: Number(f.cost.value), wholesale_price: Number(f.wholesale_price.value), retail_price: Number(f.retail_price.value),
         on_hand: Number(f.on_hand.value || 0), low_stock_threshold: Number(f.low_stock_threshold.value || 0), notes: f.notes.value,
+        description: f.description.value.trim(),
       };
       if (isEdit) await api(`/products/${p.id}`, { method: 'PUT', body });
       else await api('/products', { method: 'POST', body });
@@ -1580,13 +1583,12 @@ async function pageResellerPrices(page) {
   function draw() {
     const rows = data.products.filter(p => !q || p.name.toLowerCase().includes(q));
     renderTable($('#pl-table'), {
-      rows, empty: 'No products found.', defaultSort: 0,
+      rows, empty: 'No products found.', defaultSort: 3, defaultDir: -1,
       columns: [
-        { label: 'Product', html: r => `<span class="cell-main">${esc(r.name)}</span>`, sort: r => r.name },
+        { label: 'Product', html: r => `<span class="cell-main">${esc(r.name)}</span>${r.description ? `<div class="cell-sub">${esc(r.description)}</div>` : ''}`, sort: r => r.name },
         { label: 'Category', html: r => esc(r.category || '—'), sort: r => r.category || '' },
-        { label: 'Retail (suggested)', cls: 'num', html: r => money(r.retail_price), sort: r => r.retail_price },
         { label: 'Your price', cls: 'num', html: r => `<b>${money(r.your_price)}</b>`, sort: r => r.your_price },
-        { label: 'Availability', html: r => badge('stock', r.stock_status), sort: r => r.stock_status },
+        { label: 'In stock', cls: 'num', html: r => `${badge('stock', r.stock_status)} <b style="margin-left:6px">${Math.max(0, r.available)}</b>`, sort: r => r.available },
       ],
     });
   }
