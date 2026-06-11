@@ -43,3 +43,5 @@ Reset your admin password in **Settings → Admin users**. Reset reseller passwo
 - The database has a `customer` role reserved in the users table, so a customer login portal can be added later without schema changes.
 
 Hosted on Railway.
+
+Updated.
