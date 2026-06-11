@@ -176,4 +176,21 @@ function seedIfEmpty() {
   }
 }
 
-module.exports = { seedIfEmpty, backfillDescriptions };
+// One-time archive: move everything dated before the cutoff into a "PAST ORDERS" reseller.
+// Runs once — skipped forever after the PAST ORDERS account exists.
+const ARCHIVE_CUTOFF = '2026-06-11';
+function archivePastOrders() {
+  if (db.prepare("SELECT id FROM resellers WHERE name = 'PAST ORDERS'").get()) return;
+  db.exec('BEGIN');
+  try {
+    const id = db.prepare(`INSERT INTO resellers (name, email, phone, discount_pct, status, notes)
+                           VALUES ('PAST ORDERS', '', '', 0, 'active', 'Archive of all orders before ${ARCHIVE_CUTOFF}')`).run().lastInsertRowid;
+    const o = db.prepare("UPDATE orders SET reseller_id = ?, updated_at = datetime('now') WHERE order_date < ?").run(id, ARCHIVE_CUTOFF);
+    const p = db.prepare('UPDATE payments SET reseller_id = ? WHERE payment_date < ?').run(id, ARCHIVE_CUTOFF);
+    db.prepare('INSERT INTO audit_logs (user_name, action, entity, entity_id, details) VALUES (?,?,?,?,?)')
+      .run('system', 'archive', 'reseller', id, `Moved ${o.changes} orders and ${p.changes} payments dated before ${ARCHIVE_CUTOFF} into PAST ORDERS`);
+    db.exec('COMMIT');
+  } catch (e) { db.exec('ROLLBACK'); throw e; }
+}
+
+module.exports = { seedIfEmpty, backfillDescriptions, archivePastOrders };
