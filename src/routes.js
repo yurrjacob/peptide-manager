@@ -743,7 +743,7 @@ router.get('/export/reseller-balances.csv', requireAdmin, (req, res) => {
 function stripCosts(order, showProfit) {
   const { total_cost, total_profit, ...rest } = order;
   rest.items = order.items.map(it => {
-    const { cost_per_unit, cost, profit, ...itemRest } = it;
+    const { cost_per_unit, cost, profit, discount_pct, ...itemRest } = it;
     return showProfit ? { ...itemRest, profit } : itemRest;
   });
   if (showProfit) rest.total_profit = total_profit;
@@ -751,7 +751,7 @@ function stripCosts(order, showProfit) {
 }
 
 router.get('/my/summary', requireReseller, (req, res) => {
-  const r = db.prepare('SELECT id, name, email, phone, discount_pct, status FROM resellers WHERE id = ?').get(req.user.reseller_id);
+  const r = db.prepare('SELECT id, name, email, phone, status FROM resellers WHERE id = ?').get(req.user.reseller_id);
   const showProfit = H.settingBool('show_profit_to_resellers');
   const orders = fetchOrders('WHERE o.reseller_id = ?', [r.id]).map(o => stripCosts(o, showProfit));
   const totalSales = H.round2(orders.filter(o => !['cancelled', 'refunded'].includes(o.status)).reduce((s, o) => s + o.total_revenue, 0));
@@ -773,7 +773,7 @@ router.get('/my/products', requireReseller, (req, res) => {
     const calc = H.computeLine(p.retail_price, 0, r.discount_pct, 1);
     return {
       id: p.id, name: p.name, category: p.category, retail_price: p.retail_price,
-      discount_pct: r.discount_pct, your_price: calc.final_price,
+      your_price: calc.final_price,
       available: ps.available, stock_status: ps.stock_status, can_order: allowBackorders || ps.available > 0
     };
   });
