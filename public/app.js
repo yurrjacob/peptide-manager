@@ -527,14 +527,40 @@ async function pageOrders(page) {
       <div class="toolbar">
         <input class="search" id="f-q" placeholder="Search customer, product, notes…" value="${esc(orderFilters.q)}">
         <div class="pill-tabs" id="f-status-tabs">
-          ${['', 'unpaid', 'paid', 'delivered', 'cancelled'].map(s =>
-            `<button data-s="${s}" class="${orderFilters.status === s ? 'active' : ''}">${s === '' ? 'All' : s[0].toUpperCase() + s.slice(1)}</button>`).join('')}
+          ${['', 'unpaid', 'paid', 'delivered', 'cancelled', 'deleted'].map(s =>
+            `<button data-s="${s}" class="${orderFilters.status === s ? 'active' : ''}">${s === '' ? 'All' : s === 'deleted' ? '🗑 Trash' : s[0].toUpperCase() + s.slice(1)}</button>`).join('')}
         </div>
       </div>
       <div id="orders-table"><div class="skeleton-row"></div></div>
     </div>`;
 
   const refresh = async () => {
+    // Trash view: soft-deleted orders, each restorable
+    if (orderFilters.status === 'deleted') {
+      const trashed = await api('/orders?deleted=1');
+      const host = $('#orders-table');
+      host.innerHTML = '';
+      renderTable(host, {
+        rows: trashed, empty: 'Trash is empty. Deleted orders land here and can be restored.', emptyIcon: '🗑️',
+        columns: [
+          { label: '#', html: r => `<span class="muted">${r.id}</span>`, sort: r => r.id },
+          { label: 'Date', html: r => `<span class="nowrap">${fmtDate(r.order_date)}</span>`, sort: r => r.order_date },
+          { label: 'Customer', html: r => `<span class="cell-main">${esc(r.customer_name)}</span>`, sort: r => r.customer_name },
+          { label: 'Reseller', html: r => esc(r.reseller_name), sort: r => r.reseller_name },
+          { label: 'Products', html: r => `<span class="cell-sub">${itemsSummary(r.items)}</span>` },
+          { label: 'Revenue', cls: 'num', html: r => `<b>${money(r.total_revenue)}</b>`, sort: r => r.total_revenue },
+          { label: '', html: r => `<button class="btn sm" data-restore="${r.id}">↩︎ Restore</button>` },
+        ],
+        defaultSort: 1, defaultDir: -1,
+        afterDraw(container) {
+          $$('button[data-restore]', container).forEach(b => b.addEventListener('click', e => guard(e.target, async () => {
+            try { await api(`/orders/${b.dataset.restore}/restore`, { method: 'POST' }); toast('Order restored'); refresh(); }
+            catch (err) { toast(err.message, 'error'); }
+          })));
+        },
+      });
+      return;
+    }
     let rows = await api('/orders' + (orderFilters.q ? '?q=' + encodeURIComponent(orderFilters.q) : ''));
     if (orderFilters.status) rows = rows.filter(r => orderDisplayStatus(r) === orderFilters.status);
     const columns = [
@@ -789,7 +815,7 @@ async function openOrderDetail(orderId, onChanged) {
     </div>
     <div class="modal-foot">
       <div class="left">
-        <button class="btn danger sm" id="od-delete">Delete</button>
+        <button class="btn danger sm" id="od-delete">🗑 Move to Trash</button>
         <button class="btn sm" id="od-edit">✏️ Edit</button>
       </div>
       <button class="btn" id="od-close">Close</button>
@@ -804,12 +830,13 @@ async function openOrderDetail(orderId, onChanged) {
   $('#od-edit', m.el).onclick = () => { m.close(); openOrderForm(o, onChanged); };
   $('#od-delete', m.el).onclick = async e => {
     const ok = await confirmDialog({
-      title: `Delete order #${o.id}?`,
-      message: `This permanently removes the order for ${o.customer_name} (${money(o.total_revenue)}). Stock will be restored if it was deducted. This cannot be undone.`,
+      title: `Move order #${o.id} to Trash?`,
+      message: `This hides the order for ${o.customer_name} (${money(o.total_revenue)}) and removes it from your totals. Stock is restored if it was deducted. You can get it back anytime from Orders → 🗑 Trash → Restore.`,
+      confirmText: 'Move to Trash',
     });
     if (!ok) return;
     guard(e.target, async () => {
-      try { await api(`/orders/${o.id}`, { method: 'DELETE' }); toast('Order deleted'); await changed(); }
+      try { await api(`/orders/${o.id}`, { method: 'DELETE' }); toast('Order moved to Trash'); await changed(); }
       catch (err) { toast(err.message, 'error'); }
     });
   };
