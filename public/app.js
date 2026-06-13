@@ -519,22 +519,44 @@ async function pageOrders(page) {
   const refresh = async () => {
     let rows = await api('/orders' + (orderFilters.q ? '?q=' + encodeURIComponent(orderFilters.q) : ''));
     if (orderFilters.status) rows = rows.filter(r => orderDisplayStatus(r) === orderFilters.status);
-    renderTable($('#orders-table'), {
-      rows, empty: 'No orders match these filters.',
-      columns: [
-        { label: '#', html: r => `<span class="muted">${r.id}</span>`, sort: r => r.id },
-        { label: 'Date', html: r => `<span class="nowrap">${fmtDate(r.order_date)}</span>`, sort: r => r.order_date },
-        { label: 'Customer', html: r => `<span class="cell-main">${esc(r.customer_name)}</span>`, sort: r => r.customer_name },
-        { label: 'Reseller', html: r => esc(r.reseller_name), sort: r => r.reseller_name },
-        { label: 'Products', html: r => `<span class="cell-sub">${itemsSummary(r.items)}</span>` },
-        { label: 'Revenue', cls: 'num', html: r => `<b>${money(r.total_revenue)}</b>`, sort: r => r.total_revenue },
-        { label: 'Cost', cls: 'num', html: r => money(r.total_cost), sort: r => r.total_cost },
-        { label: 'Profit', cls: 'num', html: r => `<span class="${moneyCls(r.total_profit)}">${money(r.total_profit)}</span>`, sort: r => r.total_profit },
-        { label: 'Status', html: r => statusBadge(r), sort: r => orderDisplayStatus(r) },
-      ],
+    const columns = [
+      { label: '#', html: r => `<span class="muted">${r.id}</span>`, sort: r => r.id },
+      { label: 'Date', html: r => `<span class="nowrap">${fmtDate(r.order_date)}</span>`, sort: r => r.order_date },
+      { label: 'Customer', html: r => `<span class="cell-main">${esc(r.customer_name)}</span>`, sort: r => r.customer_name },
+      { label: 'Reseller', html: r => esc(r.reseller_name), sort: r => r.reseller_name },
+      { label: 'Products', html: r => `<span class="cell-sub">${itemsSummary(r.items)}</span>` },
+      { label: 'Revenue', cls: 'num', html: r => `<b>${money(r.total_revenue)}</b>`, sort: r => r.total_revenue },
+      { label: 'Cost', cls: 'num', html: r => money(r.total_cost), sort: r => r.total_cost },
+      { label: 'Profit', cls: 'num', html: r => `<span class="${moneyCls(r.total_profit)}">${money(r.total_profit)}</span>`, sort: r => r.total_profit },
+      { label: 'Status', html: r => statusBadge(r), sort: r => orderDisplayStatus(r) },
+    ];
+    const tableCfg = (rows, empty) => ({
+      rows, empty, columns,
       onRow: r => openOrderDetail(r.id, refresh),
       defaultSort: 1, defaultDir: -1,
     });
+
+    const host = $('#orders-table');
+    // When a specific status tab is selected, show a single flat table.
+    if (orderFilters.status) {
+      host.innerHTML = '';
+      renderTable(host, tableCfg(rows, 'No orders match these filters.'));
+      return;
+    }
+    // Default view: split into outstanding (not yet delivered) and delivered.
+    const delivered = rows.filter(r => orderDisplayStatus(r) === 'delivered');
+    const active = rows.filter(r => orderDisplayStatus(r) !== 'delivered');
+    host.innerHTML = `
+      <div class="order-group">
+        <div class="order-group-head"><span class="ogh-icon">🟡</span> To do · not yet delivered <span class="ogh-count">${active.length}</span></div>
+        <div id="orders-active"></div>
+      </div>
+      <div class="order-group">
+        <div class="order-group-head done"><span class="ogh-icon">✅</span> Delivered <span class="ogh-count">${delivered.length}</span></div>
+        <div id="orders-delivered"></div>
+      </div>`;
+    renderTable($('#orders-active'), tableCfg(active, 'Nothing outstanding — all caught up!'));
+    renderTable($('#orders-delivered'), tableCfg(delivered, 'No delivered orders yet.'));
   };
 
   const onFilter = debounce(refresh, 250);

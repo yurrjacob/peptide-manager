@@ -350,3 +350,24 @@ textarea { resize: vertical; min-height: 64px; }
   .toolbar .search { max-width: none; }
 }
 @media (min-width: 901px) { .sidebar-scrim { display: none; } }
+
+/* ---- Orders: grouped delivered vs. outstanding ---- */
+.order-group { margin-bottom: 22px; }
+.order-group:last-child { margin-bottom: 0; }
+.order-group-head {
+  display: flex; align-items: center; gap: 8px;
+  font-weight: 700; font-size: 14px; color: var(--text);
+  padding: 8px 2px; margin-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.order-group-head.done { color: var(--green); }
+.order-group-head .ogh-icon { font-size: 15px; }
+.order-group-head .ogh-count {
+  margin-left: 6px; font-size: 12px; font-weight: 700;
+  background: var(--surface-2); color: var(--text-soft);
+  border: 1px solid var(--border); border-radius: 999px;
+  padding: 1px 9px; min-width: 18px; text-align: center;
+}
+.order-group-head.done .ogh-count {
+  background: var(--green-bg); color: var(--green); border-color: transparent;
+}
