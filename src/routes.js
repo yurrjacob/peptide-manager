@@ -137,7 +137,8 @@ function validateProductBody(b) {
   return {
     name, category: str(b.category, 100), cost: H.round2(nums.cost), wholesale_price: H.round2(nums.wholesale_price),
     retail_price: H.round2(nums.retail_price), on_hand: onHand, low_stock_threshold: threshold,
-    supplier: str(b.supplier, 200), notes: str(b.notes, 1000), description: str(b.description, 300)
+    supplier: str(b.supplier, 200), notes: str(b.notes, 1000), description: str(b.description, 300),
+    no_reseller_discount: (b.no_reseller_discount === true || b.no_reseller_discount === 1 || b.no_reseller_discount === '1' || b.no_reseller_discount === 'on') ? 1 : 0
   };
 }
 
@@ -145,9 +146,9 @@ router.post('/products', requireAdmin, (req, res) => {
   const p = validateProductBody(req.body);
   const dupe = db.prepare('SELECT id FROM products WHERE name = ? AND active = 1').get(p.name);
   if (dupe) throw H.httpError(400, 'A product with this name already exists.');
-  const id = db.prepare(`INSERT INTO products (name, category, cost, wholesale_price, retail_price, on_hand, low_stock_threshold, supplier, notes, description)
-                         VALUES (?,?,?,?,?,?,?,?,?,?)`)
-    .run(p.name, p.category, p.cost, p.wholesale_price, p.retail_price, p.on_hand, p.low_stock_threshold, p.supplier, p.notes, p.description).lastInsertRowid;
+  const id = db.prepare(`INSERT INTO products (name, category, cost, wholesale_price, retail_price, on_hand, low_stock_threshold, supplier, notes, description, no_reseller_discount)
+                         VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
+    .run(p.name, p.category, p.cost, p.wholesale_price, p.retail_price, p.on_hand, p.low_stock_threshold, p.supplier, p.notes, p.description, p.no_reseller_discount).lastInsertRowid;
   if (p.on_hand !== 0) db.prepare("INSERT INTO inventory_movements (product_id, change, type, note, created_by) VALUES (?,?,'initial','Starting inventory',?)").run(id, p.on_hand, req.user.id);
   H.audit(req.user, 'create', 'product', id, p.name);
   res.json(productWithStock(db.prepare('SELECT * FROM products WHERE id = ?').get(id)));
@@ -161,8 +162,8 @@ router.put('/products/:id', requireAdmin, (req, res) => {
     const diff = p.on_hand - existing.on_hand;
     db.prepare("INSERT INTO inventory_movements (product_id, change, type, note, created_by) VALUES (?,?,'adjustment','Manual edit of on-hand',?)").run(existing.id, diff, req.user.id);
   }
-  db.prepare(`UPDATE products SET name=?, category=?, cost=?, wholesale_price=?, retail_price=?, on_hand=?, low_stock_threshold=?, supplier=?, notes=?, description=?, updated_at=datetime('now') WHERE id=?`)
-    .run(p.name, p.category, p.cost, p.wholesale_price, p.retail_price, p.on_hand, p.low_stock_threshold, p.supplier, p.notes, p.description, existing.id);
+  db.prepare(`UPDATE products SET name=?, category=?, cost=?, wholesale_price=?, retail_price=?, on_hand=?, low_stock_threshold=?, supplier=?, notes=?, description=?, no_reseller_discount=?, updated_at=datetime('now') WHERE id=?`)
+    .run(p.name, p.category, p.cost, p.wholesale_price, p.retail_price, p.on_hand, p.low_stock_threshold, p.supplier, p.notes, p.description, p.no_reseller_discount, existing.id);
   H.audit(req.user, 'update', 'product', existing.id, p.name);
   res.json(productWithStock(db.prepare('SELECT * FROM products WHERE id = ?').get(existing.id)));
 });
@@ -880,10 +881,11 @@ router.get('/my/products', requireReseller, (req, res) => {
   const allowBackorders = H.settingBool('allow_backorders');
   const rows = db.prepare('SELECT * FROM products WHERE active = 1 ORDER BY name').all().map(p => {
     const ps = productWithStock(p);
-    const calc = H.computeLine(p.retail_price, 0, r.discount_pct, 1);
+    const effDiscount = p.no_reseller_discount ? 0 : r.discount_pct;
+    const calc = H.computeLine(p.retail_price, 0, effDiscount, 1);
     return {
       id: p.id, name: p.name, category: p.category, description: p.description || '',
-      your_price: calc.final_price,
+      your_price: calc.final_price, no_reseller_discount: p.no_reseller_discount ? 1 : 0,
       available: ps.available, stock_status: ps.stock_status, can_order: allowBackorders || ps.available > 0
     };
   });

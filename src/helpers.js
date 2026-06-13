@@ -185,6 +185,7 @@ function buildOrderItems(items, reseller, { checkStock = true, excludeOrderId = 
     let discount = forceDiscount != null ? Number(forceDiscount)
       : (raw.discount_pct === '' || raw.discount_pct == null ? Number(reseller.discount_pct) : Number(raw.discount_pct));
     if (!Number.isFinite(discount) || discount < 0 || discount > 100) throw httpError(400, 'Discount must be between 0 and 100.');
+    if (p.no_reseller_discount) discount = 0; // this product is always sold at full retail (no reseller/discount price)
     qtyByProduct.set(productId, (qtyByProduct.get(productId) || 0) + qty);
     const calc = computeLine(p.retail_price, p.cost, discount, qty);
     out.push({
