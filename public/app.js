@@ -382,6 +382,9 @@ async function pageDashboard(page) {
       <div class="stat ${c.low_stock_count > 0 ? 'bad' : 'good'}"><div class="lbl">Low / out of stock</div><div class="val">${c.low_stock_count}</div><div class="sub">products need attention</div></div>
     </div>
 
+    <div class="panel"><div class="panel-head"><h2>Who owes you${c.amount_owed > 0 ? ` — <span class="neg">${money(c.amount_owed)}</span> outstanding` : ''}</h2><a class="btn sm" href="#/resellers">Resellers</a></div>
+      <div id="dash-owed"></div></div>
+
     <div class="grid-2">
       <div class="panel"><div class="panel-head"><h2>Revenue & profit by month</h2></div>
         <div class="panel-body">${months.length ? `
@@ -433,6 +436,21 @@ async function pageDashboard(page) {
     { label: 'Status', html: r => statusBadge(r) },
   ];
   renderTable($('#dash-open'), { rows: d.open_orders, empty: 'No open orders. 🎉', columns: miniOrderCols, onRow: r => openOrderDetail(r.id) });
+
+  try {
+    const resz = await api('/resellers');
+    const owing = (resz || []).filter(r => r.amount_owed > 0.009).sort((a, b) => b.amount_owed - a.amount_owed);
+    renderTable($('#dash-owed'), {
+      rows: owing, empty: 'Nobody owes you right now. 🎉', emptyIcon: '✅',
+      columns: [
+        { label: 'Reseller', html: r => `<span class="cell-main">${esc(r.name)}</span>${r.phone ? `<div class="cell-sub">${esc(r.phone)}</div>` : ''}`, sort: r => r.name },
+        { label: 'Open orders', cls: 'num', html: r => String(r.open_orders || 0), sort: r => r.open_orders || 0 },
+        { label: 'Owes', cls: 'num', html: r => `<b class="neg">${money(r.amount_owed)}</b>`, sort: r => r.amount_owed },
+      ],
+      defaultSort: 2, defaultDir: -1,
+      onRow: () => { location.hash = '#/resellers'; },
+    });
+  } catch { renderTable($('#dash-owed'), { rows: [], empty: 'Could not load balances.' }); }
 
   renderTable($('#dash-exp'), {
     rows: d.expenses, empty: 'No expenses yet. Log one when you buy inventory or supplies.', emptyIcon: '💸',
@@ -827,7 +845,7 @@ async function pageInventory(page) {
         { label: 'Product', html: r => `<span class="cell-main">${esc(r.name)}</span>${(r.description || r.notes) ? `<div class="cell-sub">${esc(r.description || r.notes)}</div>` : ''}`, sort: r => r.name },
         { label: 'Cost', cls: 'num', html: r => money(r.cost), sort: r => r.cost },
         { label: 'Retail', cls: 'num', html: r => `<b>${money(r.retail_price)}</b>`, sort: r => r.retail_price },
-        { label: 'Reseller price', cls: 'num', html: r => money(round2(r.retail_price * (1 - (Number(S.settings.default_discount_pct) || 0) / 100))), sort: r => r.retail_price },
+        { label: 'Reseller price', cls: 'num', html: r => r.no_reseller_discount ? `${money(r.retail_price)} <span class="badge gray nodot" title="No reseller discount">retail</span>` : money(round2(r.retail_price * (1 - (Number(S.settings.default_discount_pct) || 0) / 100))), sort: r => r.retail_price },
         { label: 'On hand', cls: 'num', html: r => String(r.on_hand), sort: r => r.on_hand },
         { label: 'Reserved', cls: 'num', html: r => r.reserved ? `<span class="badge yellow">${r.reserved}</span>` : '<span class="muted">0</span>', sort: r => r.reserved },
         { label: 'Available', cls: 'num', html: r => `<b>${r.available}</b>`, sort: r => r.available },
@@ -871,6 +889,10 @@ function openProductForm(p, onSaved) {
       </div>
       <div class="field"><label>On hand</label><input name="on_hand" type="number" step="1" inputmode="numeric" value="${p ? p.on_hand : 0}">
         ${isEdit ? '<div class="hint">Changing this logs a manual stock adjustment.</div>' : ''}</div>
+      <div class="field"><label style="display:flex;align-items:center;gap:9px;cursor:pointer">
+          <input type="checkbox" name="no_reseller_discount" ${p && p.no_reseller_discount ? 'checked' : ''} style="width:auto;margin:0">
+          <span>No reseller discount — always sold at full retail</span></label>
+        <div class="hint">For low-margin items (e.g. BAC water) so resellers don't get their discount on it.</div></div>
       <div class="field"><label>Notes</label><textarea name="notes">${esc(p?.notes || '')}</textarea></div>
     </form></div>
     <div class="modal-foot">
@@ -891,6 +913,7 @@ function openProductForm(p, onSaved) {
         cost: Number(f.cost.value), retail_price: Number(f.retail_price.value),
         on_hand: Number(f.on_hand.value || 0), notes: f.notes.value,
         description: f.description.value.trim(),
+        no_reseller_discount: f.no_reseller_discount.checked ? 1 : 0,
       };
       if (isEdit) await api(`/products/${p.id}`, { method: 'PUT', body });
       else await api('/products', { method: 'POST', body });
@@ -1534,7 +1557,7 @@ async function pageResellerNewOrder(page) {
   const form = $('#ro-form');
   const linesEl = $('#lines', form);
   const totalsEl = $('#totals', form);
-  const productOpts = products.map(p => `<option value="${p.id}">${esc(p.name)} — ${p.available} avail</option>`).join('');
+  const productOpts = products.filter(p => p.can_order).map(p => `<option value="${p.id}">${esc(p.name)} — ${p.available} avail</option>`).join('');
 
   function recalc() {
     let total = 0;
@@ -1642,23 +1665,30 @@ async function pageResellerPrices(page) {
   page.innerHTML = `
     <div class="page-head"><div><h1>Price list</h1><div class="page-sub">Retail prices and your price after discount</div></div></div>
     <div class="panel">
-      <div class="toolbar"><input class="search" id="pl-q" placeholder="Search products…"></div>
+      <div class="toolbar">
+        <input class="search" id="pl-q" placeholder="Search products…">
+        <div class="pill-tabs" id="pl-stock"><button class="active" data-v="instock">In stock</button><button data-v="all">Show all</button></div>
+      </div>
       <div id="pl-table"></div>
     </div>
     <div class="disclaimer">${esc(data.disclaimer || '')}</div>`;
-  let q = '';
+  let q = '', stockView = 'instock';
   function draw() {
-    const rows = data.products.filter(p => !q || p.name.toLowerCase().includes(q));
+    const rows = data.products.filter(p => (!q || p.name.toLowerCase().includes(q)) && (stockView === 'all' || p.available > 0));
     renderTable($('#pl-table'), {
-      rows, empty: 'No products found.', defaultSort: 2, defaultDir: -1,
+      rows, empty: stockView === 'instock' ? 'Nothing in stock right now — tap “Show all” to see the full list.' : 'No products found.', defaultSort: 2, defaultDir: -1,
       columns: [
         { label: 'Product', html: r => `<span class="cell-main">${esc(r.name)}</span>${r.description ? `<div class="cell-sub">${esc(r.description)}</div>` : ''}`, sort: r => r.name },
-        { label: 'Your price', cls: 'num', html: r => `<b>${money(r.your_price)}</b>`, sort: r => r.your_price },
+        { label: 'Your price', cls: 'num', html: r => `<b>${money(r.your_price)}</b>${r.no_reseller_discount ? ' <span class="badge gray nodot" title="Sold at retail — no reseller discount">retail</span>' : ''}`, sort: r => r.your_price },
         { label: 'In stock', cls: 'num', html: r => `${badge('stock', r.stock_status)} <b style="margin-left:6px">${Math.max(0, r.available)}</b>`, sort: r => r.available },
       ],
     });
   }
   $('#pl-q').addEventListener('input', debounce(e => { q = e.target.value.toLowerCase(); draw(); }, 200));
+  $$('#pl-stock button').forEach(b => b.addEventListener('click', () => {
+    $$('#pl-stock button').forEach(x => x.classList.remove('active'));
+    b.classList.add('active'); stockView = b.dataset.v; draw();
+  }));
   draw();
 }
 
