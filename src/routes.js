@@ -195,7 +195,12 @@ router.delete('/products/:id', requireAdmin, (req, res) => {
 });
 
 /* ============ orders ============ */
-function fetchOrders(where, params) {
+function fetchOrders(where, params, { includeDeleted = false } = {}) {
+  // Trashed (soft-deleted) orders are hidden from every list unless explicitly requested.
+  let finalWhere = where || '';
+  if (!includeDeleted) {
+    finalWhere = finalWhere.trim() ? `${finalWhere} AND o.deleted = 0` : 'WHERE o.deleted = 0';
+  }
   const rows = db.prepare(`
     SELECT o.*, r.name AS reseller_name,
       (SELECT IFNULL(SUM(revenue),0) FROM order_items WHERE order_id = o.id) AS total_revenue,
@@ -206,7 +211,7 @@ function fetchOrders(where, params) {
     FROM orders o
     JOIN resellers r ON r.id = o.reseller_id
     LEFT JOIN deliveries d ON d.order_id = o.id
-    ${where}
+    ${finalWhere}
     ORDER BY o.order_date DESC, o.id DESC`).all(...params);
   if (rows.length) {
     const ids = rows.map(r => r.id);
@@ -243,6 +248,7 @@ function buildOrderFilters(q) {
 }
 
 router.get('/orders', requireAdmin, (req, res) => {
+  if (req.query.deleted === '1') return res.json(fetchOrders('WHERE o.deleted = 1', [], { includeDeleted: true }));
   const { where, params } = buildOrderFilters(req.query);
   res.json(fetchOrders(where, params));
 });
@@ -456,19 +462,39 @@ router.post('/orders/:id/mark-paid', requireAdmin, (req, res) => {
   res.json(fetchOrders('WHERE o.id = ?', [order.id])[0]);
 });
 
+// Soft delete: move an order to the Trash (recoverable). Frees stock + any payments,
+// hides it from every list and from totals, but keeps the record so it can be restored.
 router.delete('/orders/:id', requireAdmin, (req, res) => {
   const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(Number(req.params.id));
   if (!order) throw H.httpError(404, 'Order not found.');
+  if (order.deleted) return res.json({ ok: true });
   db.exec('BEGIN');
   try {
     if (order.inventory_deducted) H.restoreOrderInventory(order.id, req.user);
     const affectedPayments = db.prepare('SELECT DISTINCT payment_id FROM payment_allocations WHERE order_id = ?').all(order.id);
-    db.prepare('DELETE FROM orders WHERE id = ?').run(order.id); // cascades items, delivery, allocations
+    db.prepare('DELETE FROM payment_allocations WHERE order_id = ?').run(order.id); // free any money applied to this order
+    db.prepare("UPDATE orders SET deleted = 1, status = 'cancelled', inventory_deducted = 0, updated_at = datetime('now') WHERE id = ?").run(order.id);
+    db.prepare("UPDATE deliveries SET status = 'cancelled', updated_at = datetime('now') WHERE order_id = ?").run(order.id);
     for (const { payment_id } of affectedPayments) H.allocatePayment(payment_id); // re-apply freed money to other unpaid orders
-    H.audit(req.user, 'delete', 'order', order.id, order.customer_name);
+    H.audit(req.user, 'delete', 'order', order.id, `${order.customer_name} (moved to Trash)`);
     db.exec('COMMIT');
   } catch (e) { db.exec('ROLLBACK'); throw e; }
   res.json({ ok: true });
+});
+
+// Restore an order from the Trash. It comes back as a cancelled order (visible again);
+// set it to Unpaid to fully reopen it.
+router.post('/orders/:id/restore', requireAdmin, (req, res) => {
+  const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(Number(req.params.id));
+  if (!order) throw H.httpError(404, 'Order not found.');
+  if (!order.deleted) throw H.httpError(400, 'That order is not in the Trash.');
+  db.exec('BEGIN');
+  try {
+    db.prepare("UPDATE orders SET deleted = 0, updated_at = datetime('now') WHERE id = ?").run(order.id);
+    H.audit(req.user, 'restore', 'order', order.id, order.customer_name);
+    db.exec('COMMIT');
+  } catch (e) { db.exec('ROLLBACK'); throw e; }
+  res.json(fetchOrders('WHERE o.id = ?', [order.id], { includeDeleted: true })[0]);
 });
 
 /* ============ resellers (admin) ============ */
