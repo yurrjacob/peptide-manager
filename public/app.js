@@ -642,9 +642,20 @@ function setupLineEditor(form, products, getDiscount, { showProfit = true, showA
       <button type="button" class="line-del" title="Remove line">✕</button>`;
     linesEl.appendChild(row);
     const sel = $('.li-product', row), qty = $('.li-qty', row), disc = $('.li-disc', row);
-    if (item) { sel.value = item.product_id; qty.value = item.qty; disc.value = item.discount_pct; }
+    // Lock the discount field to 0 for products flagged "no reseller discount".
+    const applyDiscLock = () => {
+      const p = products.find(x => x.id === Number(sel.value));
+      if (p && p.no_reseller_discount) {
+        disc.value = 0; disc.disabled = true; disc.title = 'Always sold at full retail — no reseller discount';
+      } else {
+        disc.disabled = false; disc.title = '';
+      }
+    };
+    if (item) { sel.value = item.product_id; qty.value = item.qty; disc.value = item.discount_pct; applyDiscLock(); }
     sel.addEventListener('change', () => {
-      if (sel.value && disc.value === '') disc.value = getDiscount();
+      const p = products.find(x => x.id === Number(sel.value));
+      if (sel.value && disc.value === '' && !(p && p.no_reseller_discount)) disc.value = getDiscount();
+      applyDiscLock();
       if (sel.value && qty.value === '') qty.value = 1;
       recalc();
     });
@@ -666,7 +677,8 @@ function setupLineEditor(form, products, getDiscount, { showProfit = true, showA
   function recalc() {
     let rev = 0, cost = 0, valid = true;
     $$('.line-row:not(.header)', linesEl).forEach(row => {
-      const { qty, disc, p } = lineData(row);
+      const { qty, disc: rawDisc, p } = lineData(row);
+      const disc = (p && p.no_reseller_discount) ? 0 : rawDisc; // flagged products never get a discount
       const finalEl = $('.li-final', row), totalEl = $('.li-total', row);
       if (!p || !Number.isInteger(qty) || qty <= 0 || disc == null || disc < 0 || disc > 100) {
         finalEl.textContent = '—'; totalEl.textContent = '—'; valid = false; return;
@@ -694,9 +706,10 @@ function setupLineEditor(form, products, getDiscount, { showProfit = true, showA
       const rows = $$('.line-row:not(.header)', linesEl);
       if (!rows.length) throw new Error('Add at least one product to the order.');
       return rows.map(row => {
-        const { pid, qty, disc, p } = lineData(row);
+        const { pid, qty, disc: rawDisc, p } = lineData(row);
         if (!pid || !p) throw new Error('Every line needs a product selected.');
         if (!Number.isInteger(qty) || qty <= 0) throw new Error(`Quantity for "${p.name}" must be a whole number above zero.`);
+        const disc = (p && p.no_reseller_discount) ? 0 : rawDisc; // flagged products always sold at full retail
         if (disc == null || !Number.isFinite(disc) || disc < 0 || disc > 100) throw new Error(`Discount for "${p.name}" must be between 0 and 100.`);
         return { product_id: pid, qty, discount_pct: disc };
       });
