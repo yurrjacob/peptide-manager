@@ -203,9 +203,9 @@ function fetchOrders(where, params, { includeDeleted = false } = {}) {
   }
   const rows = db.prepare(`
     SELECT o.*, r.name AS reseller_name,
-      (SELECT IFNULL(SUM(revenue),0) FROM order_items WHERE order_id = o.id) AS total_revenue,
+      ((SELECT IFNULL(SUM(revenue),0) FROM order_items WHERE order_id = o.id) + o.shipping_amount) AS total_revenue,
       (SELECT IFNULL(SUM(cost),0)    FROM order_items WHERE order_id = o.id) AS total_cost,
-      (SELECT IFNULL(SUM(profit),0)  FROM order_items WHERE order_id = o.id) AS total_profit,
+      ((SELECT IFNULL(SUM(profit),0)  FROM order_items WHERE order_id = o.id) + o.shipping_amount) AS total_profit,
       (SELECT IFNULL(SUM(amount),0)  FROM payment_allocations WHERE order_id = o.id) AS paid_amount,
       d.status AS delivery_status, d.delivery_date, d.address, d.delivery_notes, d.admin_notes
     FROM orders o
@@ -253,17 +253,24 @@ router.get('/orders', requireAdmin, (req, res) => {
   res.json(fetchOrders(where, params));
 });
 
-function createOrder(req, { resellerId, customerName, orderDate, status, notes, address, deliveryNotes, items, forceDiscount }) {
+function normalizeShipping(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return H.round2(n);
+}
+
+function createOrder(req, { resellerId, customerName, orderDate, status, notes, address, deliveryNotes, items, forceDiscount, shippingAmount = 0 }) {
   const reseller = db.prepare('SELECT * FROM resellers WHERE id = ?').get(resellerId);
   if (!reseller) throw H.httpError(400, 'Choose a reseller for this order.');
   if (!customerName) throw H.httpError(400, 'Customer name is required.');
   if (!isDate(orderDate)) throw H.httpError(400, 'Order date is required (YYYY-MM-DD).');
   const lines = H.buildOrderItems(items, reseller, { forceDiscount });
+  const shipping = normalizeShipping(shippingAmount);
 
   db.exec('BEGIN');
   try {
-    const orderId = db.prepare('INSERT INTO orders (order_date, customer_name, reseller_id, status, notes, created_by) VALUES (?,?,?,?,?,?)')
-      .run(orderDate, customerName, reseller.id, status, notes, req.user.id).lastInsertRowid;
+    const orderId = db.prepare('INSERT INTO orders (order_date, customer_name, reseller_id, status, notes, created_by, shipping_amount) VALUES (?,?,?,?,?,?,?)')
+      .run(orderDate, customerName, reseller.id, status, notes, req.user.id, shipping).lastInsertRowid;
     const insItem = db.prepare(`INSERT INTO order_items (order_id, product_id, product_name, qty, retail_price, cost_per_unit, discount_pct, final_price, revenue, cost, profit)
                                 VALUES (?,?,?,?,?,?,?,?,?,?,?)`);
     for (const l of lines) insItem.run(orderId, l.product_id, l.product_name, l.qty, l.retail_price, l.cost_per_unit, l.discount_pct, l.final_price, l.revenue, l.cost, l.profit);
@@ -282,7 +289,7 @@ router.post('/orders', requireAdmin, (req, res) => {
   const orderId = createOrder(req, {
     resellerId: Number(b.reseller_id), customerName: str(b.customer_name, 200), orderDate: str(b.order_date, 10),
     status, notes: str(b.notes, 2000), address: str(b.address, 500), deliveryNotes: str(b.delivery_notes, 1000),
-    items: b.items, forceDiscount: null
+    items: b.items, forceDiscount: null, shippingAmount: b.shipping_amount
   });
   res.json(fetchOrders('WHERE o.id = ?', [orderId])[0]);
 });
@@ -309,8 +316,9 @@ router.put('/orders/:id', requireAdmin, (req, res) => {
                                   VALUES (?,?,?,?,?,?,?,?,?,?,?)`);
       for (const l of lines) insItem.run(order.id, l.product_id, l.product_name, l.qty, l.retail_price, l.cost_per_unit, l.discount_pct, l.final_price, l.revenue, l.cost, l.profit);
     }
-    db.prepare(`UPDATE orders SET order_date=?, customer_name=?, reseller_id=?, notes=?, updated_at=datetime('now') WHERE id=?`)
-      .run(orderDate, customerName, reseller.id, str(b.notes ?? order.notes, 2000), order.id);
+    const shipping = b.shipping_amount !== undefined ? normalizeShipping(b.shipping_amount) : order.shipping_amount;
+    db.prepare(`UPDATE orders SET order_date=?, customer_name=?, reseller_id=?, notes=?, shipping_amount=?, updated_at=datetime('now') WHERE id=?`)
+      .run(orderDate, customerName, reseller.id, str(b.notes ?? order.notes, 2000), shipping, order.id);
     if (b.address !== undefined || b.delivery_notes !== undefined) {
       db.prepare(`UPDATE deliveries SET address = COALESCE(?, address), delivery_notes = COALESCE(?, delivery_notes), updated_at=datetime('now') WHERE order_id=?`)
         .run(b.address !== undefined ? str(b.address, 500) : null, b.delivery_notes !== undefined ? str(b.delivery_notes, 1000) : null, order.id);
@@ -504,8 +512,8 @@ function resellerRow(r) {
       COUNT(*) AS total_orders,
       SUM(CASE WHEN o.status = 'open' THEN 1 ELSE 0 END) AS open_orders,
       SUM(CASE WHEN o.status = 'completed' THEN 1 ELSE 0 END) AS completed_orders,
-      IFNULL(SUM(CASE WHEN o.status NOT IN ('cancelled','refunded') THEN (SELECT SUM(revenue) FROM order_items WHERE order_id = o.id) END), 0) AS total_revenue,
-      IFNULL(SUM(CASE WHEN o.status NOT IN ('cancelled','refunded') THEN (SELECT SUM(profit) FROM order_items WHERE order_id = o.id) END), 0) AS total_profit
+      IFNULL(SUM(CASE WHEN o.status NOT IN ('cancelled','refunded') THEN (IFNULL((SELECT SUM(revenue) FROM order_items WHERE order_id = o.id),0) + o.shipping_amount) END), 0) AS total_revenue,
+      IFNULL(SUM(CASE WHEN o.status NOT IN ('cancelled','refunded') THEN (IFNULL((SELECT SUM(profit) FROM order_items WHERE order_id = o.id),0) + o.shipping_amount) END), 0) AS total_profit
     FROM orders o WHERE o.reseller_id = ?`).get(r.id);
   const paid = db.prepare('SELECT IFNULL(SUM(amount),0) AS p FROM payments WHERE reseller_id = ?').get(r.id).p;
   const owed = H.resellerBalance(r.id);
@@ -787,6 +795,11 @@ router.put('/settings', requireAdmin, (req, res) => {
       const n = Number(v);
       if (!Number.isInteger(n) || n < 0) throw H.httpError(400, 'Low stock threshold must be a whole number ≥ 0.');
       v = String(n);
+    }
+    if (key === 'default_shipping_price') {
+      const n = Number(v);
+      if (!Number.isFinite(n) || n < 0) throw H.httpError(400, 'Default shipping price must be a number ≥ 0.');
+      v = String(H.round2(n));
     }
     H.setSetting(key, v);
   }

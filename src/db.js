@@ -15,6 +15,7 @@ function migrate() {
   try { db.exec("ALTER TABLE products ADD COLUMN description TEXT DEFAULT ''"); } catch { /* column already exists */ }
   try { db.exec("ALTER TABLE products ADD COLUMN no_reseller_discount INTEGER NOT NULL DEFAULT 0"); } catch { /* column already exists */ }
   try { db.exec("ALTER TABLE orders ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0"); } catch { /* column already exists */ }
+  try { db.exec("ALTER TABLE orders ADD COLUMN shipping_amount REAL NOT NULL DEFAULT 0"); } catch { /* column already exists */ }
   db.exec(`CREATE TABLE IF NOT EXISTS expenses (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     expense_date TEXT NOT NULL,

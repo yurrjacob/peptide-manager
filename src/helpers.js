@@ -54,6 +54,7 @@ const SETTING_DEFAULTS = {
   allow_backorders: '0',
   require_payment_before_delivery: '0',
   show_profit_to_resellers: '0',
+  default_shipping_price: '15',
   allow_self_registration: '1',
   registration_code: '',
   product_disclaimer: 'Products are sold for research purposes only and are not intended for human consumption, or to diagnose, treat, cure, or prevent any disease.'
@@ -118,7 +119,10 @@ function restoreOrderInventory(orderId, user) {
 
 /* ---------- orders & payments ---------- */
 function orderTotal(orderId) {
-  return db.prepare('SELECT IFNULL(SUM(revenue),0) AS t FROM order_items WHERE order_id = ?').get(orderId).t;
+  // Order total billed to the customer = product revenue + shipping charge.
+  const items = db.prepare('SELECT IFNULL(SUM(revenue),0) AS t FROM order_items WHERE order_id = ?').get(orderId).t;
+  const ship = db.prepare('SELECT IFNULL(shipping_amount,0) AS s FROM orders WHERE id = ?').get(orderId).s;
+  return round2(items + ship);
 }
 function orderAllocated(orderId) {
   return db.prepare('SELECT IFNULL(SUM(amount),0) AS a FROM payment_allocations WHERE order_id = ?').get(orderId).a;
