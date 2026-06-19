@@ -624,7 +624,7 @@ function lineEditorHTML(showProfit) {
     <div class="totals-box" id="totals"></div>`;
 }
 
-function setupLineEditor(form, products, getDiscount, { showProfit = true, showAvailability = true } = {}) {
+function setupLineEditor(form, products, getDiscount, { showProfit = true, showAvailability = true, getShipping = null } = {}) {
   const linesEl = $('#lines', form);
   const totalsEl = $('#totals', form);
   const productOpts = products.map(p =>
@@ -691,10 +691,14 @@ function setupLineEditor(form, products, getDiscount, { showProfit = true, showA
       rev = round2(rev + lineRev);
       if (p.cost != null) cost = round2(cost + round2(p.cost * qty));
     });
+    const shipping = getShipping ? (round2(Number(getShipping()) || 0)) : 0;
+    const grand = round2(rev + shipping);
     totalsEl.innerHTML = `
-      <span>Revenue: <b>${money(rev)}</b></span>
+      <span>Products: <b>${money(rev)}</b></span>
+      ${shipping > 0 ? `<span>Shipping: <b>${money(shipping)}</b></span>` : ''}
       ${showProfit ? `<span>Cost: <b>${money(cost)}</b></span>
-      <span>Profit: <b class="${moneyCls(rev - cost)}">${money(round2(rev - cost))}</b></span>` : `<span>Amount owed: <b>${money(rev)}</b></span>`}`;
+      <span>Profit: <b class="${moneyCls(grand - cost)}">${money(round2(grand - cost))}</b></span>` : ''}
+      <span>${showProfit ? 'Total' : 'Amount owed'}: <b>${money(grand)}</b></span>`;
     return { rev, cost, valid };
   }
 
@@ -736,6 +740,14 @@ async function openOrderForm(order, onSaved) {
       ${!isEdit ? `<div class="field"><label>Order status</label>
         <select name="status"><option value="open">Open</option><option value="completed">Completed (deducts stock now)</option></select></div>` : ''}
       <div class="form-row">
+        <div class="field"><label style="display:flex;align-items:center;gap:9px;cursor:pointer">
+            <input type="checkbox" name="add_shipping" ${isEdit && order.shipping_amount > 0 ? 'checked' : ''} style="width:auto;margin:0">
+            <span>Add shipping</span></label>
+          <div class="hint">Adds a flat shipping charge to the order total.</div></div>
+        <div class="field"><label>Shipping price</label>
+          <input name="shipping_amount" type="number" min="0" step="0.01" inputmode="decimal" value="${isEdit && order.shipping_amount ? order.shipping_amount : (S.settings.default_shipping_price ?? 15)}" ${(isEdit && order.shipping_amount > 0) ? '' : 'disabled'}></div>
+      </div>
+      <div class="form-row">
         <div class="field"><label>Delivery address</label><input name="address" placeholder="Optional" value="${esc(isEdit ? (order.address || '') : '')}"></div>
         <div class="field"><label>Delivery notes</label><input name="delivery_notes" placeholder="Optional" value="${esc(isEdit ? (order.delivery_notes || '') : '')}"></div>
       </div>
@@ -747,12 +759,20 @@ async function openOrderForm(order, onSaved) {
     </div>`, { wide: true });
 
   const form = $('#order-form', m.el);
+  const shippingValue = () => form.add_shipping.checked ? (Number(form.shipping_amount.value) || 0) : 0;
   const editor = setupLineEditor(form, products, () => {
     const opt = form.reseller_id.selectedOptions[0];
     return opt && opt.dataset.disc != null ? opt.dataset.disc : (S.settings.default_discount_pct ?? 0);
-  });
+  }, { getShipping: shippingValue });
   if (isEdit) order.items.forEach(it => editor.addLine(it));
   else editor.addLine();
+
+  form.add_shipping.addEventListener('change', () => {
+    form.shipping_amount.disabled = !form.add_shipping.checked;
+    if (form.add_shipping.checked && form.shipping_amount.value === '') form.shipping_amount.value = S.settings.default_shipping_price ?? 15;
+    editor.recalc();
+  });
+  form.shipping_amount.addEventListener('input', editor.recalc);
 
   form.reseller_id.addEventListener('change', () => {
     // fill blank discounts with the new reseller default
@@ -773,6 +793,7 @@ async function openOrderForm(order, onSaved) {
         order_date: form.order_date.value, customer_name: form.customer_name.value.trim(),
         reseller_id: Number(form.reseller_id.value), notes: form.notes.value,
         address: form.address.value, delivery_notes: form.delivery_notes.value, items,
+        shipping_amount: shippingValue(),
       };
       if (!isEdit) body.status = form.status.value;
       if (isEdit) await api(`/orders/${order.id}`, { method: 'PUT', body });
@@ -806,7 +827,7 @@ async function openOrderDetail(orderId, onChanged) {
           <td class="num">${money(it.cost)}</td><td class="num"><span class="${moneyCls(it.profit)}">${money(it.profit)}</span></td></tr>`).join('')}
         </tbody></table></div>
       <div class="totals-box" style="margin-bottom:14px">
-        <span>Revenue: <b>${money(o.total_revenue)}</b></span><span>Cost: <b>${money(o.total_cost)}</b></span>
+        <span>Revenue: <b>${money(o.total_revenue)}</b></span>${o.shipping_amount > 0 ? `<span>(incl. shipping <b>${money(o.shipping_amount)}</b>)</span>` : ''}<span>Cost: <b>${money(o.total_cost)}</b></span>
         <span>Profit: <b class="${moneyCls(o.total_profit)}">${money(o.total_profit)}</b></span>
         <span>Paid: <b>${money(o.paid_amount)}</b></span><span>Due: <b class="${o.balance_due > 0 ? 'neg' : 'pos'}">${money(o.balance_due)}</b></span>
       </div>
@@ -1440,7 +1461,11 @@ async function pageSettings(page) {
             <div class="field"><label>Currency code</label><input name="currency" value="${esc(settings.currency)}" placeholder="USD"></div>
             <div class="field"><label>Currency symbol</label><input name="currency_symbol" value="${esc(settings.currency_symbol)}" placeholder="$"></div>
           </div>
-          <div class="field"><label>Low-stock threshold (applies to all products)</label><input name="low_stock_default_threshold" type="number" min="0" step="1" value="${esc(settings.low_stock_default_threshold)}"></div>
+          <div class="form-row">
+            <div class="field"><label>Low-stock threshold (applies to all products)</label><input name="low_stock_default_threshold" type="number" min="0" step="1" value="${esc(settings.low_stock_default_threshold)}"></div>
+            <div class="field"><label>Default shipping price</label><input name="default_shipping_price" type="number" min="0" step="0.01" value="${esc(settings.default_shipping_price ?? '15')}">
+              <div class="hint">Pre-fills the shipping amount when you tick "Add shipping" on an order.</div></div>
+          </div>
           ${sw('allow_backorders', 'Allow backorders', 'Let orders exceed available stock')}
           ${sw('require_payment_before_delivery', 'Require payment before delivery', 'Orders must be fully paid before they can be marked delivered')}
           ${sw('show_profit_to_resellers', 'Show profit to resellers', 'Off by default — resellers never see your cost')}
@@ -1492,6 +1517,7 @@ async function pageSettings(page) {
         currency: f.currency.value.trim() || 'USD',
         currency_symbol: f.currency_symbol.value.trim() || '$',
         low_stock_default_threshold: f.low_stock_default_threshold.value,
+        default_shipping_price: f.default_shipping_price.value,
         allow_backorders: f.allow_backorders.checked ? '1' : '0',
         require_payment_before_delivery: f.require_payment_before_delivery.checked ? '1' : '0',
         show_profit_to_resellers: f.show_profit_to_resellers.checked ? '1' : '0',
