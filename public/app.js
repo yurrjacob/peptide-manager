@@ -416,6 +416,7 @@ async function pageDashboard(page) {
     <div class="panel"><div class="panel-head"><h2>Low stock products</h2><a class="btn sm" href="#/inventory">View inventory</a></div>
       <div id="dash-lowstock"></div></div>
     <div class="panel"><div class="panel-head"><h2>Expenses (money out)</h2><button class="btn sm primary" id="add-exp">＋ Log expense</button></div>
+      <div class="hint" style="padding:11px 16px;border-bottom:1px solid var(--border);background:var(--surface-2)">💡 Reminder: shipping you charge on orders counts as revenue &amp; profit. Log what you actually pay for postage/packaging here so your Cash profit stays accurate.</div>
       <div id="dash-exp"></div></div>`;
 
   renderTable($('#dash-lowstock'), {
