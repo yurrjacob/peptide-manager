@@ -856,7 +856,7 @@ async function pageInventory(page) {
     <div class="panel">
       <div class="toolbar">
         <input class="search" id="i-q" placeholder="Search products…">
-        <select id="i-stock"><option value="">Stock: all</option><option value="in_stock">In stock</option><option value="low_stock">Low stock</option><option value="out_of_stock">Out of stock</option></select>
+        <select id="i-stock"><option value="">Stock: all</option><option value="available">Available</option><option value="out_of_stock">Out of stock</option></select>
       </div>
       <div id="inv-table"></div>
     </div>`;
@@ -865,7 +865,9 @@ async function pageInventory(page) {
   function draw() {
     const rows = products.filter(p =>
       (!filters.q || p.name.toLowerCase().includes(filters.q) || (p.description || '').toLowerCase().includes(filters.q)) &&
-      (!filters.stock || p.stock_status === filters.stock));
+      (!filters.stock
+        || (filters.stock === 'available' && p.available > 0)
+        || (filters.stock === 'out_of_stock' && p.available <= 0)));
     renderTable($('#inv-table'), {
       rows, empty: 'No products match.', defaultSort: 6, defaultDir: -1,
       columns: [
