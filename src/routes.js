@@ -113,8 +113,27 @@ function productWithStock(p) {
 }
 
 router.get('/products', requireAdmin, (req, res) => {
-  const rows = db.prepare('SELECT * FROM products WHERE active = 1 ORDER BY name').all().map(productWithStock);
+  // Archived products (active=0) are hidden everywhere by default — pass ?include_archived=1
+  // (used by the Inventory page) to also return them so they can be viewed/unarchived.
+  const where = req.query.include_archived === '1' ? '' : 'WHERE active = 1';
+  const rows = db.prepare(`SELECT * FROM products ${where} ORDER BY name`).all().map(productWithStock);
   res.json(rows);
+});
+
+router.post('/products/:id/archive', requireAdmin, (req, res) => {
+  const p = db.prepare('SELECT * FROM products WHERE id = ?').get(Number(req.params.id));
+  if (!p) throw H.httpError(404, 'Product not found.');
+  db.prepare("UPDATE products SET active = 0, updated_at = datetime('now') WHERE id = ?").run(p.id);
+  H.audit(req.user, 'archive', 'product', p.id, p.name);
+  res.json(productWithStock(db.prepare('SELECT * FROM products WHERE id = ?').get(p.id)));
+});
+
+router.post('/products/:id/unarchive', requireAdmin, (req, res) => {
+  const p = db.prepare('SELECT * FROM products WHERE id = ?').get(Number(req.params.id));
+  if (!p) throw H.httpError(404, 'Product not found.');
+  db.prepare("UPDATE products SET active = 1, updated_at = datetime('now') WHERE id = ?").run(p.id);
+  H.audit(req.user, 'unarchive', 'product', p.id, p.name);
+  res.json(productWithStock(db.prepare('SELECT * FROM products WHERE id = ?').get(p.id)));
 });
 
 function validateProductBody(b) {
