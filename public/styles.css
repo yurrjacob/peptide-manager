@@ -371,3 +371,13 @@ textarea { resize: vertical; min-height: 64px; }
 .order-group-head.done .ogh-count {
   background: var(--green-bg); color: var(--green); border-color: transparent;
 }
+
+/* ---- table totals footer ---- */
+.table-wrap tfoot .totals-row td {
+  border-top: 2px solid var(--border);
+  border-bottom: none;
+  background: var(--surface-2);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}

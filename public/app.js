@@ -174,6 +174,7 @@ function renderTable(container, cfg) {
         <thead><tr>${cfg.columns.map((c, i) =>
           `<th class="${c.cls || ''} ${c.sort ? 'sortable' : ''}" data-i="${i}">${esc(c.label)}${state.key === i ? (state.dir > 0 ? ' ↑' : ' ↓') : ''}</th>`).join('')}</tr></thead>
         <tbody>${rows.map((r, ri) => `<tr data-ri="${ri}" class="${cfg.onRow ? 'clickable' : ''}">${cfg.columns.map(c => `<td class="${c.cls || ''}">${c.html(r)}</td>`).join('')}</tr>`).join('')}</tbody>
+        ${cfg.footer ? `<tfoot><tr class="totals-row">${cfg.footer(rows).map((cell, i) => `<td class="${cfg.columns[i] && cfg.columns[i].cls || ''}">${cell}</td>`).join('')}</tr></tfoot>` : ''}
       </table></div>`;
     $$('th.sortable', container).forEach(th => th.addEventListener('click', () => {
       const i = Number(th.dataset.i);
@@ -575,10 +576,18 @@ async function pageOrders(page) {
       { label: 'Profit', cls: 'num', html: r => `<span class="${moneyCls(r.total_profit)}">${money(r.total_profit)}</span>`, sort: r => r.total_profit },
       { label: 'Status', html: r => statusBadge(r), sort: r => orderDisplayStatus(r) },
     ];
+    const ordersFooter = (rows) => {
+      const rev = round2(rows.reduce((s, r) => s + (r.total_revenue || 0), 0));
+      const cost = round2(rows.reduce((s, r) => s + (r.total_cost || 0), 0));
+      const prof = round2(rows.reduce((s, r) => s + (r.total_profit || 0), 0));
+      return ['<b>Totals</b>', '', '', '', `<span class="muted">${rows.length} order${rows.length === 1 ? '' : 's'}</span>`,
+        `<b>${money(rev)}</b>`, `<b>${money(cost)}</b>`, `<b class="${moneyCls(prof)}">${money(prof)}</b>`, ''];
+    };
     const tableCfg = (rows, empty) => ({
       rows, empty, columns,
       onRow: r => openOrderDetail(r.id, refresh),
       defaultSort: 1, defaultDir: -1,
+      footer: ordersFooter,
     });
 
     const host = $('#orders-table');
