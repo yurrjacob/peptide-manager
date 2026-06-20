@@ -890,7 +890,7 @@ async function openOrderDetail(orderId, onChanged) {
    ADMIN — INVENTORY
 ====================================================================== */
 async function pageInventory(page) {
-  let products = await loadProducts(true);
+  let products = await api('/products?include_archived=1');
   page.innerHTML = `
     <div class="page-head"><div><h1>Inventory</h1><div class="page-sub">Products, pricing and stock levels</div></div>
       <div class="head-actions">
@@ -901,13 +901,15 @@ async function pageInventory(page) {
       <div class="toolbar">
         <input class="search" id="i-q" placeholder="Search products…">
         <select id="i-stock"><option value="">Stock: all</option><option value="available">Available</option><option value="out_of_stock">Out of stock</option></select>
+        <select id="i-status"><option value="active">Active</option><option value="archived">Archived</option><option value="all">All (incl. archived)</option></select>
       </div>
       <div id="inv-table"></div>
     </div>`;
 
-  const filters = { q: '', stock: '' };
+  const filters = { q: '', stock: '', status: 'active' };
   function draw() {
     const rows = products.filter(p =>
+      (filters.status === 'all' || (filters.status === 'archived' ? !p.active : !!p.active)) &&
       (!filters.q || p.name.toLowerCase().includes(filters.q) || (p.description || '').toLowerCase().includes(filters.q)) &&
       (!filters.stock
         || (filters.stock === 'available' && p.available > 0)
@@ -922,26 +924,38 @@ async function pageInventory(page) {
         { label: 'On hand', cls: 'num', html: r => String(r.on_hand), sort: r => r.on_hand },
         { label: 'Reserved', cls: 'num', html: r => r.reserved ? `<span class="badge yellow">${r.reserved}</span>` : '<span class="muted">0</span>', sort: r => r.reserved },
         { label: 'Available', cls: 'num', html: r => `<b>${r.available}</b>`, sort: r => r.available },
-        { label: 'Status', html: r => badge('stock', r.stock_status), sort: r => r.stock_status },
+        { label: 'Status', html: r => r.active ? badge('stock', r.stock_status) : '<span class="badge gray nodot">Archived</span>', sort: r => (r.active ? '1' : '0') + r.stock_status },
         {
-          label: '', cls: 'nowrap', html: r => `
+          label: '', cls: 'nowrap', html: r => r.active ? `
           <button class="btn sm" data-act="adjust" data-id="${r.id}">± Stock</button>
           <button class="btn sm" data-act="edit" data-id="${r.id}">Edit</button>
+          <button class="btn sm" data-act="archive" data-id="${r.id}">Archive</button>
+          <button class="btn sm danger" data-act="del" data-id="${r.id}">Delete</button>` : `
+          <button class="btn sm primary" data-act="unarchive" data-id="${r.id}">↩︎ Unarchive</button>
           <button class="btn sm danger" data-act="del" data-id="${r.id}">Delete</button>` },
       ],
       afterDraw(container) {
-        $$('button[data-act]', container).forEach(b => b.addEventListener('click', () => {
+        $$('button[data-act]', container).forEach(b => b.addEventListener('click', async () => {
           const p = products.find(x => x.id === Number(b.dataset.id));
           if (b.dataset.act === 'edit') openProductForm(p, reload);
           if (b.dataset.act === 'adjust') openAdjustStock(p, reload);
           if (b.dataset.act === 'del') deleteProduct(p, reload);
+          if (b.dataset.act === 'archive') guard(b, async () => {
+            try { await api(`/products/${p.id}/archive`, { method: 'POST' }); await loadProducts(true); toast('Product archived — hidden from dropdowns'); reload(); }
+            catch (err) { toast(err.message, 'error'); }
+          });
+          if (b.dataset.act === 'unarchive') guard(b, async () => {
+            try { await api(`/products/${p.id}/unarchive`, { method: 'POST' }); await loadProducts(true); toast('Product unarchived'); reload(); }
+            catch (err) { toast(err.message, 'error'); }
+          });
         }));
       },
     });
   }
-  async function reload() { products = await loadProducts(true); draw(); }
+  async function reload() { products = await api('/products?include_archived=1'); draw(); }
   $('#i-q').addEventListener('input', debounce(e => { filters.q = e.target.value.toLowerCase(); draw(); }, 200));
   $('#i-stock').addEventListener('change', e => { filters.stock = e.target.value; draw(); });
+  $('#i-status').addEventListener('change', e => { filters.status = e.target.value; draw(); });
   $('#export-inv').onclick = () => { window.location.href = '/api/export/inventory.csv'; };
   $('#add-product').onclick = () => openProductForm(null, reload);
   draw();
